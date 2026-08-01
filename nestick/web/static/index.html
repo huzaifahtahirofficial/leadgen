@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nestick — Control Panel</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔎</text></svg>">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">◎</span>
+    <div>
+      <h1>Nestick <span class="tag">Tech Lead Generator</span></h1>
+      <p>SkelerSecurity Intelligence Engine</p>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <span id="statusPill" class="pill idle">Idle</span>
+    <button type="button" class="info" data-tip="Optional paid services. Nestick works fully without them using free engines. SerpApi = Google results. Hunter.io = named staff e-mails. Google Maps = business listings." title="Optional paid services. Nestick works fully without them using free engines. SerpApi = Google results. Hunter.io = named staff e-mails. Google Maps = business listings." aria-label="Help: Optional paid services. Nestick works fully without them usi"><span aria-hidden="true">i</span></button><button id="helpBtn" class="ghost helpBtn" type="button" title="Replay the guided tour">? Guide</button>
+    <button id="keysBtn" class="ghost" type="button">API keys</button>
+    <button id="logoutBtn" class="ghost hidden" type="button">Sign out</button>
+  </div>
+</header>
+
+<main>
+  <!-- ---------------- Sidebar: the form ---------------- -->
+  <aside class="panel">
+    <form id="jobForm" autocomplete="off">
+
+      <div class="tabs" role="tablist">
+        <button type="button" class="tab active" data-mode="search" role="tab">Search</button>
+        <button type="button" class="tab" data-mode="urls" role="tab">URL list</button>
+      </div>
+
+      <section id="pane-search" class="pane">
+        <label>Search query <button type="button" class="info" data-tip="What you are looking for, in plain words. Include the city for best results, e.g. “dentists in Lahore”. Put one query per line to run several at once." title="What you are looking for, in plain words. Include the city for best results, e.g. “dentists in Lahore”. Put one query per line to run several at once." aria-label="Help: What you are looking for, in plain words. Include the city f"><span aria-hidden="true">i</span></button>
+          <textarea name="query" rows="3" placeholder="dentists in Lahore&#10;(one query per line)"></textarea>
+        </label>
+        <div class="row">
+          <label>Pages <button type="button" class="info" data-tip="How many pages of search results to read. 1 page ≈ 10 sites. Raise it for more leads; each extra page costs time and SERP quota." title="How many pages of search results to read. 1 page ≈ 10 sites. Raise it for more leads; each extra page costs time and SERP quota." aria-label="Help: How many pages of search results to read. 1 page ≈ 10 sites."><span aria-hidden="true">i</span></button>
+            <input type="number" name="pages" value="1" min="1" max="20">
+          </label>
+          <label>Engine <button type="button" class="info" data-tip="Where the list of sites comes from. Auto picks the best available: SerpApi if you added a key, otherwise the free DuckDuckGo engine. Bing is a second free option." title="Where the list of sites comes from. Auto picks the best available: SerpApi if you added a key, otherwise the free DuckDuckGo engine. Bing is a second free option." aria-label="Help: Where the list of sites comes from. Auto picks the best avai"><span aria-hidden="true">i</span></button>
+            <select name="engine">
+              <option value="auto">Auto</option>
+              <option value="duckduckgo">DuckDuckGo</option>
+              <option value="bing">Bing</option>
+              <option value="serpapi">SerpApi</option>
+            </select>
+          </label>
+        </div>
+        <label>Location <span class="hint">optional</span> <button type="button" class="info" data-tip="Biases results to a city or region, and is required for keyless business listings so the map area can be worked out." title="Biases results to a city or region, and is required for keyless business listings so the map area can be worked out." aria-label="Help: Biases results to a city or region, and is required for keyl"><span aria-hidden="true">i</span></button>
+          <input type="text" name="location" placeholder="Lahore, Pakistan">
+        </label>
+      </section>
+
+      <section id="pane-urls" class="pane hidden">
+        <label>Websites <button type="button" class="info" data-tip="Paste sites you already have, one per line. Nestick visits each one and pulls out e-mails, phones and social profiles. No search engine is used in this mode." title="Paste sites you already have, one per line. Nestick visits each one and pulls out e-mails, phones and social profiles. No search engine is used in this mode." aria-label="Help: Paste sites you already have, one per line. Nestick visits e"><span aria-hidden="true">i</span></button>
+          <textarea name="urls" rows="7" placeholder="https://acme.com&#10;https://globex.com"></textarea>
+        </label>
+      </section>
+
+      <details class="advanced">
+        <summary>Advanced</summary>
+        <div class="row">
+          <label>Concurrency <button type="button" class="info" data-tip="How many pages are fetched at the same time. Higher is faster but more likely to be rate-limited. 24 suits most runs; lower it to 8 if sites start blocking you." title="How many pages are fetched at the same time. Higher is faster but more likely to be rate-limited. 24 suits most runs; lower it to 8 if sites start blocking you." aria-label="Help: How many pages are fetched at the same time. Higher is faste"><span aria-hidden="true">i</span></button>
+            <input type="number" name="concurrency" value="24" min="1" max="128">
+          </label>
+          <label>Pages / site <button type="button" class="info" data-tip="How deep to go inside each website. Contact details are often on a second page, so keep this at 4 or more. Setting it to 1 will miss most contacts." title="How deep to go inside each website. Contact details are often on a second page, so keep this at 4 or more. Setting it to 1 will miss most contacts." aria-label="Help: How deep to go inside each website. Contact details are ofte"><span aria-hidden="true">i</span></button>
+            <input type="number" name="max_pages" value="5" min="1" max="50">
+          </label>
+        </div>
+        <div class="row">
+          <label>Link depth <button type="button" class="info" data-tip="How many link hops to follow from the first page. 1 follows the Contact / About / Privacy links, which is where addresses usually live. 0 reads only the landing page." title="How many link hops to follow from the first page. 1 follows the Contact / About / Privacy links, which is where addresses usually live. 0 reads only the landing page." aria-label="Help: How many link hops to follow from the first page. 1 follows "><span aria-hidden="true">i</span></button>
+            <input type="number" name="depth" value="1" min="0" max="3">
+          </label>
+          <label>Delay (s) <button type="button" class="info" data-tip="A polite pause between requests to the same site. 0 is fine for most runs. Set 1–2 seconds when scraping a single small site so you do not overload it." title="A polite pause between requests to the same site. 0 is fine for most runs. Set 1–2 seconds when scraping a single small site so you do not overload it." aria-label="Help: A polite pause between requests to the same site. 0 is fine "><span aria-hidden="true">i</span></button>
+            <input type="number" name="delay" value="0" min="0" max="30" step="0.5">
+          </label>
+        </div>
+        <p class="group-label">Collect <button type="button" class="info" data-tip="Which details to extract. E-mail finds mailto links, plain text and obfuscated forms like “name (at) site (dot) com”. Social covers 10 networks." title="Which details to extract. E-mail finds mailto links, plain text and obfuscated forms like “name (at) site (dot) com”. Social covers 10 networks." aria-label="Help: Which details to extract. E-mail finds mailto links, plain t"><span aria-hidden="true">i</span></button></p>
+        <div class="checks">
+          <label class="check"><input type="checkbox" name="want_email" checked> E-mail</label>
+          <label class="check"><input type="checkbox" name="want_phone" checked> Phone</label>
+          <label class="check"><input type="checkbox" name="want_social" checked> Social</label>
+        </div>
+        <label class="check"><input type="checkbox" name="respect_robots" checked> Respect robots.txt <button type="button" class="info" data-tip="Obeys each site’s crawling rules. Leave this on: it is the polite and legally safer default. Turning it off may breach a site’s terms of service." title="Obeys each site’s crawling rules. Leave this on: it is the polite and legally safer default. Turning it off may breach a site’s terms of service." aria-label="Help: Obeys each site’s crawling rules. Leave this on: it is the p"><span aria-hidden="true">i</span></button></label>
+        <label class="check"><input type="checkbox" name="cache" checked> Use cache <button type="button" class="info" data-tip="Re-uses pages downloaded earlier, so repeating a search is near-instant and costs no bandwidth. Untick it if you need absolutely fresh data." title="Re-uses pages downloaded earlier, so repeating a search is near-instant and costs no bandwidth. Untick it if you need absolutely fresh data." aria-label="Help: Re-uses pages downloaded earlier, so repeating a search is n"><span aria-hidden="true">i</span></button></label>
+        <label class="check"><input type="checkbox" name="places"> Business listings <button type="button" class="info" data-tip="Adds map listings with address, phone and coordinates. Uses Google Places if you added a key, otherwise the free OpenStreetMap database. Needs a Location." title="Adds map listings with address, phone and coordinates. Uses Google Places if you added a key, otherwise the free OpenStreetMap database. Needs a Location." aria-label="Help: Adds map listings with address, phone and coordinates. Uses "><span aria-hidden="true">i</span></button>
+          <span class="hint">(Google Places if a key is set, otherwise free OpenStreetMap)</span></label>
+      </details>
+
+      <div class="actions">
+        <button id="runBtn" class="primary" type="submit">Start scraping</button>
+        <button id="stopBtn" class="danger hidden" type="button">Stop</button>
+      </div>
+      <p id="formError" class="error hidden"></p>
+    </form>
+  </aside>
+
+  <!-- ---------------- Main: results ---------------- -->
+  <section class="content">
+
+    <div id="apiBanner" class="banner hidden"></div>
+
+    <div class="stats" id="stats">
+      <div class="stat"><span class="num" id="s-leads">0</span><span class="lbl">leads</span></div>
+      <div class="stat"><span class="num" id="s-emails">0</span><span class="lbl">e-mails</span></div>
+      <div class="stat"><span class="num" id="s-phones">0</span><span class="lbl">with phone</span></div>
+      <div class="stat"><span class="num" id="s-req">0</span><span class="lbl">requests</span></div>
+      <div class="stat"><span class="num" id="s-rate">0</span><span class="lbl">req/s</span></div>
+      <div class="stat"><span class="num" id="s-time">0s</span><span class="lbl">elapsed</span></div>
+    </div>
+
+    <div class="progress-wrap"><div id="bar" class="bar"></div></div>
+
+    <div class="toolbar">
+      <input id="filter" type="search" placeholder="Filter results…">
+      <label class="check"><input type="checkbox" id="onlyEmail"> Only with e-mail <button type="button" class="info" data-tip="Hides rows that have no e-mail address, leaving only the leads you can contact directly. Nothing is deleted — exports still contain everything." title="Hides rows that have no e-mail address, leaving only the leads you can contact directly. Nothing is deleted — exports still contain everything." aria-label="Help: Hides rows that have no e-mail address, leaving only the lea"><span aria-hidden="true">i</span></button></label>
+      <span class="spacer"></span>
+      <div class="downloads">
+        <span>Export</span><button type="button" class="info" data-tip="Download your results. CSV opens anywhere, Excel is formatted with clickable links and colour-coded scores, JSON keeps every field for developers." title="Download your results. CSV opens anywhere, Excel is formatted with clickable links and colour-coded scores, JSON keeps every field for developers." aria-label="Help: Download your results. CSV opens anywhere, Excel is formatte"><span aria-hidden="true">i</span></button>
+        <a class="dl" data-fmt="csv">CSV</a>
+        <a class="dl" data-fmt="xlsx">Excel</a>
+        <a class="dl" data-fmt="json">JSON</a>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table id="results">
+        <thead>
+          <tr>
+            <th class="c-score" data-sort="score">Score <button type="button" class="info" data-tip="Lead quality out of 100. Built from how many e-mails were found, whether a phone and social profiles exist, and how trustworthy each find was. Green 60+, amber 30+. Click any header to re-sort." title="Lead quality out of 100. Built from how many e-mails were found, whether a phone and social profiles exist, and how trustworthy each find was. Green 60+, amber 30+. Click any header to re-sort." aria-label="Help: Lead quality out of 100. Built from how many e-mails were fo"><span aria-hidden="true">i</span></button></th>
+            <th data-sort="domain">Domain</th>
+            <th data-sort="name">Name</th>
+            <th>E-mails</th>
+            <th>Phones</th>
+            <th>Social</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div id="empty" class="empty">
+        <p class="big">No results yet</p>
+        <p>Enter a query or a list of URLs, then press <strong>Start scraping</strong>.</p>
+      </div>
+    </div>
+
+    <details class="console analytics-box" id="analyticsBox">
+      <summary>Intelligence report <button type="button" class="info"
+        data-tip="Aggregate analysis of this run: how many leads you can actually contact, which domains can receive mail, e-mail quality, and the platforms these companies use."
+        title="Aggregate analysis of this run: how many leads you can actually contact, which domains can receive mail, e-mail quality, and the platforms these companies use."
+        aria-label="Help: intelligence report"><span aria-hidden="true">i</span></button></summary>
+      <div id="analyticsOut" class="analytics"></div>
+    </details>
+
+    <details class="console" id="consoleBox">
+      <summary>Activity log</summary>
+      <pre id="logOut"></pre>
+    </details>
+  </section>
+</main>
+
+<!-- ---------------- API-key modal ---------------- -->
+<div id="keysModal" class="modal hidden">
+  <div class="modal-card">
+    <h2>API keys</h2>
+    <p class="muted">Optional. Stored locally in <code>~/.nestick/config.json</code>.
+       The scraper works without them.</p>
+    <label>SerpApi <span class="hint">Google results</span>
+      <input type="password" id="k-serpapi" placeholder="leave blank to keep existing">
+    </label>
+    <label>Hunter.io <span class="hint">e-mail enrichment</span>
+      <input type="password" id="k-hunter" placeholder="leave blank to keep existing">
+    </label>
+    <label>Google Maps <span class="hint">Places businesses</span>
+      <input type="password" id="k-maps" placeholder="leave blank to keep existing">
+    </label>
+    <label>NumVerify <span class="hint">free tier &middot; phone carrier &amp; line type</span>
+      <input type="password" id="k-numverify" placeholder="leave blank to keep existing">
+    </label>
+    <div class="actions right">
+      <button type="button" class="ghost" id="keysCancel">Cancel</button>
+      <button type="button" class="primary" id="keysSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ---------------- Login screen (shown when the API requires auth) ---------------- -->
+<div id="loginScreen" class="login-screen hidden">
+  <form id="loginForm" class="login-card" autocomplete="on">
+    <h2>Nestick</h2>
+    <p class="muted">Sign in with your SkelerSecurity account</p>
+    <label>Email <input type="email" id="loginEmail" name="email" autocomplete="username" required></label>
+    <label>Password <input type="password" id="loginPassword" name="password" autocomplete="current-password" required></label>
+    <p id="loginError" class="error hidden"></p>
+    <button type="submit" class="primary" id="loginBtn" style="width:100%">Sign in</button>
+  </form>
+</div>
+
+<script src="/static/app.js"></script>
+<div id="tip" class="tip-bubble" role="tooltip"></div>
+</body>
+</html>

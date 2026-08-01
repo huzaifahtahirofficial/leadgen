@@ -1,0 +1,7 @@
+# Exclude heavy/local files from the Vercel upload.
+.nestick-venv
+.nestick_cache.sqlite*
+__pycache__
+*.py[cod]
+deploy/vercel/dist
+.git

@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nestick"
+version = "1.3.0"
+description = "Nestick Tech Lead Generator — SkelerSecurity Intelligence Engine. Async contact and lead intelligence: SERP discovery, site crawling and API enrichment in one engine."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["scraper", "email", "leads", "crawler", "osint", "serpapi", "hunter.io", "async"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP :: Indexing/Search",
+    "Typing :: Typed",
+]
+dependencies = [
+    "httpx[http2]>=0.27",
+]
+
+[project.optional-dependencies]
+full = [
+    "rich>=13.0",       # live dashboard + pretty logs
+    "openpyxl>=3.1",    # xlsx export
+    "orjson>=3.9",      # faster json
+    "brotli>=1.1",      # brotli-encoded responses
+    "uvloop>=0.19; sys_platform != 'win32'",
+]
+auth = [
+    "pymongo>=4.6",     # centralized auth DB (CENTRAL_AUTH_GUIDE.md)
+    "bcrypt>=4.0",      # password hashes stored by the Node/Mongoose platforms
+    "PyJWT>=2.8",       # HS256 tokens shared via JWT_SECRET
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[project.scripts]
+nestick = "nestick.cli:main"
+nestick-ui = "nestick.web.server:launch"
+
+[tool.setuptools]
+packages = ["nestick", "nestick.web"]
+
+[tool.setuptools.package-data]
+"nestick.web" = ["static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

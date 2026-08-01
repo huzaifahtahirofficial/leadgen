@@ -1,0 +1,144 @@
+╔══════════════════════════════════════════════════════════════════════╗
+║            NESTICK TECH LEAD GENERATOR  ·  v1.3.0                    ║
+║              SkelerSecurity Intelligence Engine                      ║
+╚══════════════════════════════════════════════════════════════════════╝
+
+HOW TO START
+────────────────────────────────────────────────────────────────────────
+  Windows      double-click   Nestick.bat
+  macOS        double-click   Nestick.command
+  Linux        run            ./Nestick.sh
+
+The first launch takes ~30 seconds: it creates a private virtual
+environment inside this folder and installs the dependencies. Every
+launch after that is instant. Nothing is installed system-wide, and
+deleting this folder removes the app completely.
+
+REQUIREMENT: Python 3.10 or newer.
+  Windows/macOS  →  https://www.python.org/downloads/
+                    (on Windows, tick "Add Python to PATH")
+  Linux          →  sudo apt install python3 python3-venv
+
+
+USING IT
+────────────────────────────────────────────────────────────────────────
+On first launch a short guided tour walks you through the five steps.
+Every setting also has a small round "i" button next to it - hover or
+tap it for a plain-English explanation. Press "? Guide" in the top
+right to replay the tour at any time.
+
+A window opens with two tabs:
+
+  Search      type what you're looking for, e.g. "dentists in Lahore"
+  URL list    paste websites you already have, one per line
+
+Press "Start scraping". Results appear live, sorted best-first. When
+it finishes, download CSV, Excel or JSON with one click.
+
+Everything else has a sensible default — open "Advanced" only if you
+want to change concurrency, crawl depth, or politeness delay.
+
+
+FREE INTELLIGENCE (no keys needed)
+────────────────────────────────────────────────────────────────────────
+Every run is automatically enriched from free sources:
+
+  * MX check      - confirms a domain can really receive e-mail, and
+                    reveals whether they run Google Workspace or
+                    Microsoft 365. Dead domains are flagged for you.
+  * OpenStreetMap - business listings with address, phone and website
+                    when you tick "Business listings".
+  * Wikidata      - company industry and description (optional).
+
+Open "Intelligence report" under the results table to see the full
+breakdown: how many leads you can actually contact, e-mail quality,
+score bands and the platforms these companies use.
+
+
+API KEYS (all optional)
+────────────────────────────────────────────────────────────────────────
+The scraper works fully without any keys, using DuckDuckGo. Click
+"API keys" in the top-right to add:
+
+  SerpApi       Google results instead of DuckDuckGo
+  Hunter.io     named contacts for domains with no public address
+  Google Maps   business listings: address, geo, rating, phone
+  NumVerify     phone carrier and line type (free tier available)
+
+Keys are stored locally in ~/.nestick/config.json and are never
+sent anywhere except to that provider. If a key is wrong, the app
+tells you exactly why and carries on with the keyless engine.
+
+
+IF THE WINDOW SHOWS "This site can't be reached"
+────────────────────────────────────────────────────────────────────────
+This was fixed in v1.3.0. If you still see ERR_CONNECTION_REFUSED:
+
+  1. Keep the console window OPEN. Closing it stops the server.
+     The same applies to "Could not reach the server" inside the app.
+  2. Read the address it prints, e.g. http://127.0.0.1:8765 , and open
+     that in your browser manually.
+  3. Try a different display mode:
+        Nestick.bat --mode browser     (your normal browser)
+        Nestick.bat --mode server      (no window; open the URL yourself)
+  4. Pick a fixed port if something else is using the default:
+        Nestick.bat --port 9000
+  5. If antivirus blocks local servers, allow python.exe to listen on
+     127.0.0.1. Nestick only ever binds to your own machine.
+
+
+WHAT IT CANNOT DO  (please read)
+────────────────────────────────────────────────────────────────────────
+• Sites that publish no address at all. Some large platforms
+  (e.g. Airbnb) route everything through support forms - there is
+  simply nothing to extract. JavaScript-heavy sites ARE supported:
+  the app reads the JSON that single-page apps embed in the markup.
+• CAPTCHAs and hard bot walls are not bypassed.
+• Contact details are only found if they are published on the page.
+• E-mail addresses are not verified for deliverability.
+
+
+RECURRING / SCHEDULED JOBS
+────────────────────────────────────────────────────────────────────────
+Declare a job once in a YAML file and let it run on a schedule:
+
+  ... -m nestick job template > jobs.yaml   # starter file, then edit
+  ... -m nestick job apply -f jobs.yaml     # register it
+  ... -m nestick job get                    # see status
+  ... -m nestick job controller             # keep running on schedule
+
+Set  schedule: "@daily"  (or "every 6h") in the file to repeat.
+Bad settings are caught instantly, before any crawling starts.
+
+
+COMMAND LINE
+────────────────────────────────────────────────────────────────────────
+The same engine has a full CLI. Inside this folder:
+
+  .nestick-venv/bin/python -m nestick --help          (macOS/Linux)
+  .nestick-venv\Scripts\python -m nestick --help      (Windows)
+
+  Examples:
+    ... -m nestick -q "cafes in Lahore" --pages 2 -f csv,xlsx
+    ... -m nestick -i urls.txt --threadiness 64 -f all
+
+Window modes:  --mode native | chrome | browser | server
+
+
+SECURITY
+────────────────────────────────────────────────────────────────────────
+• Scraped links can never reach your local network, router, or cloud
+  metadata service. Use --allow-private if you deliberately want to
+  scrape an intranet.
+• Exported CSV/Excel files are protected against formula injection, so
+  a malicious page cannot run commands when you open the results.
+• The app window only accepts requests from your own machine; other
+  websites cannot read your API keys.
+
+
+LEGAL
+────────────────────────────────────────────────────────────────────────
+robots.txt is respected by default. Follow each site's terms of
+service, keep a polite delay, and remember that personal data is
+regulated (GDPR, CCPA, CAN-SPAM). Use for legitimate B2B research
+on data you have a lawful basis to collect.

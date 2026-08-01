@@ -1,0 +1,53 @@
+# Render Blueprint — the Nestick BACKEND (scraping engine + API).
+#
+# The control-panel frontend is served by Vercel (deploy/vercel); this service
+# hosts the engine and the /api/* JSON endpoints the frontend calls.
+#
+#   render blueprint deploy deploy/render/render.yaml
+#
+# Notes:
+#   * Binds to 0.0.0.0:$PORT (Render's convention) via the env defaults in
+#     nestick/web/server.py and nestick/cli.py — no flags needed.
+#   * NESTICK_ALLOWED_HOSTS opens the CSRF/DNS-rebinding guard to *.onrender.com,
+#     *.vercel.app AND skelersecurity.app so the frontends can call this API
+#     cross-origin. Add any custom domain here too, comma-separated:
+#       value: ".onrender.com,example.com,.vercel.app,skelersecurity.app"
+#   * Cache + API keys live on a persistent disk so they survive redeploys.
+#     Without it they are wiped on every restart (ephemeral filesystem).
+#   * Free tier spins down after ~15 min idle; polling from the open tab keeps
+#     it awake during a run. Upgrade to a paid plan for always-on.
+
+services:
+  - type: web
+    name: nestick
+    runtime: python
+    plan: free
+    buildCommand: pip install .[full,auth]
+    startCommand: nestick ui
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.3
+      - key: NESTICK_ALLOWED_HOSTS
+        value: ".onrender.com,.vercel.app,skelersecurity.app"
+      - key: NESTICK_CONFIG_DIR
+        value: /var/data/nestick
+      - key: NESTICK_CACHE_PATH
+        value: /var/data/nestick/cache.sqlite
+      - key: NESTICK_NO_BROWSER
+        value: "1"
+      # Centralized authentication (CENTRAL_AUTH_GUIDE.md). When BOTH are set,
+      # the API requires a JWT and a login page is shown. Without them the app
+      # runs open. Set these in the Render dashboard (never commit secrets):
+      # - key: AUTH_MONGODB_URI
+      # - key: JWT_SECRET
+      # - key: NESTICK_JWT_EXPIRES   # optional, seconds (default 86400)
+      # Optional paid API keys — set these in the Render dashboard:
+      # - key: SERPAPI_KEY
+      # - key: HUNTER_API_KEY
+      # - key: GOOGLE_MAPS_KEY
+      # - key: NUMVERIFY_KEY
+    disk:
+      name: nestick-data
+      mountPath: /var/data
+      sizeGB: 1
