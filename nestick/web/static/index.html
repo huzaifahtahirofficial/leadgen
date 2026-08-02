@@ -3,17 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Nestick — Control Panel</title>
+<title>NestickTech — Lead Gen</title>
 <link rel="stylesheet" href="/static/app.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔎</text></svg>">
 </head>
 <body>
 
 <header class="topbar">
   <div class="brand">
-    <span class="logo">◎</span>
     <div>
-      <h1>Nestick <span class="tag">Tech Lead Generator</span></h1>
+      <h1>NestickTech <span class="tag">Lead Gen</span></h1>
       <p>SkelerSecurity Intelligence Engine</p>
     </div>
   </div>
@@ -189,15 +187,56 @@
   </div>
 </div>
 
-<!-- ---------------- Login screen (shown when the API requires auth) ---------------- -->
+<!-- ---------------- Login gate (shown when the API requires auth) ---------------- -->
 <div id="loginScreen" class="login-screen hidden">
-  <form id="loginForm" class="login-card" autocomplete="on">
-    <h2>Nestick</h2>
-    <p class="muted">Sign in with your SkelerSecurity account</p>
-    <label>Email <input type="email" id="loginEmail" name="email" autocomplete="username" required></label>
-    <label>Password <input type="password" id="loginPassword" name="password" autocomplete="current-password" required></label>
+  <div class="hex-bg" aria-hidden="true"></div>
+  <form id="loginForm" class="login-card" autocomplete="on" novalidate>
+    <div class="card-rings" aria-hidden="true">
+      <div class="ring ring-1"></div>
+      <div class="ring ring-2"></div>
+      <div class="ring ring-3"></div>
+      <div class="core"></div>
+    </div>
+    <span class="corner tl" aria-hidden="true"></span>
+    <span class="corner tr" aria-hidden="true"></span>
+    <span class="corner bl" aria-hidden="true"></span>
+    <span class="corner br" aria-hidden="true"></span>
+    <div class="card-scan" aria-hidden="true"></div>
+
+    <header class="card-head">
+      <p class="eyebrow">SkelerSecurity · Intelligence Gateway</p>
+      <h2>NestickTech <span>Lead Gen</span></h2>
+      <p class="muted">Secure access terminal &mdash; identity verification required</p>
+    </header>
+
+    <div class="verif-line" role="status">
+      <span class="led" aria-hidden="true"></span>
+      <span id="verifStatus" class="verif-text">CHANNEL SECURED &middot; AWAITING CREDENTIALS</span>
+    </div>
+
+    <label class="field">
+      <span class="field-label">CLEARANCE ID / E-MAIL</span>
+      <input type="email" id="loginEmail" name="email" autocomplete="username"
+             placeholder="agent@nesticktech.io" spellcheck="false" required>
+    </label>
+    <label class="field">
+      <span class="field-label">ACCESS KEY</span>
+      <input type="password" id="loginPassword" name="password"
+             autocomplete="current-password" placeholder="&#9679;&#9679;&#9679;&#9679;&#9679;&#9679;&#9679;&#9679;&#9679;&#9679;&#9679;&#9679;" required>
+    </label>
+
     <p id="loginError" class="error hidden"></p>
-    <button type="submit" class="primary" id="loginBtn" style="width:100%">Sign in</button>
+
+    <button type="submit" class="primary gate-btn" id="loginBtn">
+      <span class="btn-scan" aria-hidden="true"></span>
+      <span class="btn-text" id="loginBtnText">UNLOCK TERMINAL</span>
+    </button>
+
+    <footer class="card-foot">
+      <span>PROTOCOL&nbsp;v1.0</span>
+      <span>ENCRYPTED&nbsp;&middot;&nbsp;AES-256</span>
+      <span class="live">&#9679; LIVE</span>
+    </footer>
   </form>
 </div>
 

@@ -349,14 +349,33 @@
   }
 
   /* ---------------- authentication ---------------- */
+  function setVerif(text) {
+    const st = $("#verifStatus");
+    if (st) st.textContent = text;
+  }
+
   function showLogin() {
     const s = $("#loginScreen");
-    if (s) s.classList.remove("hidden");
+    if (s) {
+      s.classList.remove("hidden", "granted", "denied");
+    }
+    const err = $("#loginError");
+    if (err) err.classList.add("hidden");
+    setVerif("CHANNEL SECURED \u00b7 AWAITING CREDENTIALS");
     const p = $("#loginPassword");
     if (p) setTimeout(() => p.focus(), 0);
   }
 
   function hideLogin() { $("#loginScreen")?.classList.add("hidden"); }
+
+  function setGate(klass, status) {
+    const s = $("#loginScreen");
+    if (!s) return;
+    s.classList.remove("granted", "denied");
+    void s.offsetWidth;            // restart the shake animation
+    if (klass) s.classList.add(klass);
+    setVerif(status);
+  }
 
   function updateAuthUI() {
     const btn = $("#logoutBtn");
@@ -368,8 +387,11 @@
     e.preventDefault();
     const err = $("#loginError");
     const btn = $("#loginBtn");
+    const text = $("#loginBtnText");
     if (err) err.classList.add("hidden");
-    if (btn) { btn.disabled = true; btn.textContent = "Signing in\u2026"; }
+    if (btn) btn.disabled = true;
+    if (text) text.textContent = "AUTHORIZING\u2026";
+    setVerif("SCANNING CREDENTIALS\u2026");
     try {
       const res = await fetch(`${API_BASE}/api/login`, {
         method: "POST",
@@ -381,17 +403,23 @@
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.token) {
+        setGate("denied", "ACCESS DENIED \u00b7 IDENTITY NOT RECOGNISED");
         if (err) { err.textContent = data.error || "Sign in failed."; err.classList.remove("hidden"); }
         return;
       }
       token = data.token;
       try { localStorage.setItem("nestick.token", token); } catch {}
+      setGate("granted", "ACCESS GRANTED \u00b7 IDENTITY VERIFIED");
+      if (text) text.textContent = "ACCESS GRANTED";
+      await new Promise((r) => setTimeout(r, 750));
       hideLogin();
       updateAuthUI();
     } catch (e2) {
+      setGate("denied", "ACCESS DENIED \u00b7 LINK SECURED");
       if (err) { err.textContent = e2 && e2.message ? e2.message : "Could not reach the server."; err.classList.remove("hidden"); }
     } finally {
-      if (btn) { btn.disabled = false; btn.textContent = "Sign in"; }
+      if (btn) btn.disabled = false;
+      if (text) text.textContent = "UNLOCK TERMINAL";
     }
   });
 
