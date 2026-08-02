@@ -60,6 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
   nestick -i urls.txt --threadiness 64 --want email,phone -o out/leads
   SERPAPI_KEY=xxx nestick -q "saas companies berlin" --pages 3 --format all
   HUNTER_API_KEY=xxx nestick -q "law firms nyc" --diagnostics-port 6060
+  nestick fetch https://example.com --dump markdown   # inspect a single page
 
 every flag below can also be set through its environment variable.""",
     )
@@ -382,6 +383,11 @@ def main(argv: list[str] | None = None) -> int:
         from .ctl import main as ctl_main
 
         return ctl_main(argv[1:])
+    # Single-page inspection: `nestick fetch URL --dump text`
+    if argv and argv[0] == "fetch":
+        from .fetch import fetch_main
+
+        return fetch_main(argv[1:])
 
     args = build_parser().parse_args(argv)
     if args.version:

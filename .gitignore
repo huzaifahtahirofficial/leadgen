@@ -25,6 +25,9 @@ deploy/vercel/dist/
 # Local config (API keys live in ~/.nestick/config.json, never commit)
 config.json
 
+# Reference project (separate git repo — never embed as a submodule)
+KeywordSearch/
+
 # OS / editor cruft
 .DS_Store
 Thumbs.db

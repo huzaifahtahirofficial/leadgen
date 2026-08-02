@@ -29,7 +29,15 @@ class ApiError(RuntimeError):
 
 DDG_RESULT_RE = re.compile(r'<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"', re.I)
 DDG_ANY_RE = re.compile(r'href="(/l/\?uddg=[^"]+|https?://duckduckgo\.com/l/\?[^"]+)"', re.I)
-BING_RESULT_RE = re.compile(r'<li class="b_algo".*?<h2><a[^>]+href="([^"]+)"', re.I | re.S)
+# Bing no longer wraps results in <li class="b_algo">; anchors live directly in
+# <h2> and point at /ck/a redirects with the real URL base64'd in u=…
+BING_RESULT_RE = re.compile(r'<h2[^>]*>\s*<a[^>]+href="([^"]+)"', re.I | re.S)
+BING_CK_RE = re.compile(r"[?&]u=a1([A-Za-z0-9+/=]+)")
+#: Phrases that mark a block/challenge page rather than real results.
+BLOCK_MARKERS = (
+    "anomaly", "captcha", "unusual traffic", "are you a robot",
+    "verify you", "challenge", "temporarily blocked", "robot check",
+)
 
 
 class Discovery:
@@ -169,10 +177,14 @@ class Discovery:
             r = await self.f.get(url, robots_check=False, use_cache=False,
                                  headers={"Referer": "https://duckduckgo.com/"})
             if not r.ok:
+                self._note_blocked("DuckDuckGo", r.status)
                 break
             hrefs = DDG_RESULT_RE.findall(r.text) or DDG_ANY_RE.findall(r.text)
             page_urls = [self._unwrap_ddg(h) for h in hrefs]
             page_urls = [u for u in page_urls if u]
+            if not page_urls and self._looks_blocked(r.text):
+                self._note_blocked("DuckDuckGo")
+                break
             out += page_urls
             if len(page_urls) < 5:
                 break
@@ -198,15 +210,52 @@ class Discovery:
             url = f"https://www.bing.com/search?q={quote_plus(q)}&first={page * 10 + 1}&count=30"
             r = await self.f.get(url, robots_check=False, use_cache=False)
             if not r.ok:
+                self._note_blocked("Bing", r.status)
                 break
-            hits = [normalise_url(unescape(h)) for h in BING_RESULT_RE.findall(r.text)]
+            hits = [self._decode_bing(h) for h in BING_RESULT_RE.findall(r.text)]
             hits = [h for h in hits if h]
+            if not hits and self._looks_blocked(r.text):
+                self._note_blocked("Bing")
+                break
             out += hits
             if not hits:
                 break
             await asyncio.sleep(0.8)
         log.info("Bing: %d URLs for %r", len(out), query)
         return out
+
+    @staticmethod
+    def _decode_bing(href: str) -> str | None:
+        """Resolve a ``bing.com/ck/a`` redirect to the actual destination URL."""
+        href = unescape(href).replace("&amp;", "&")
+        m = BING_CK_RE.search(href)
+        if m:
+            import base64
+
+            try:
+                pad = m.group(1) + "=" * (-len(m.group(1)) % 4)
+                target = base64.b64decode(pad).decode("utf-8", "replace")
+            except Exception:  # noqa: BLE001
+                target = ""
+            if target:
+                return normalise_url(target)
+            return None
+        if "bing.com" in urlsplit(href).netloc and "/ck/a" not in href:
+            return None
+        return normalise_url(href)
+
+    @staticmethod
+    def _looks_blocked(text: str) -> bool:
+        low = (text or "").lower()
+        return any(m in low for m in BLOCK_MARKERS)
+
+    def _note_blocked(self, engine: str, status: int | None = None) -> None:
+        """Record a block/challenge so the UI explains why a run found nothing."""
+        code = f" (HTTP {status})" if status else ""
+        msg = (f"{engine} returned a block or challenge page{code} — datacenter "
+               f"IPs are often rate-limited. Add a SerpApi key, use the Places "
+               f"option (free OpenStreetMap), or run from a residential IP.")
+        self._note_api_error(msg)
 
     # ------------------------------------------------------------------ #
     # Google Places (port of app.js behaviour, server-side)
