@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NestickTech — Admin</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  .admin-wrap { max-width: 920px; margin: 0 auto; padding: 26px; display: flex; flex-direction: column; gap: 18px; }
+  .admin-wrap h2 { margin: 0; }
+  .admin-wrap > p.muted { margin: 0 0 4px; }
+  .grant-form { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; }
+  .grant-form label { display: flex; flex-direction: column; gap: 6px; font-size: 10px; letter-spacing: .16em; color: var(--muted); font-weight: 600; }
+  .grant-form input[type=email] { margin: 0; min-width: 240px; }
+  .grant-form select { margin: 0; min-width: 130px; }
+  .grant-form .check { flex-direction: row; align-items: center; gap: 8px; padding-bottom: 11px; font-size: 12.5px; letter-spacing: 0; color: var(--text-2); }
+  .grant-form .primary { width: auto; margin: 0; padding: 10px 18px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 9px 12px; border-bottom: 1px solid var(--line); text-align: left; font-size: 13px; }
+  th { font-size: 10.5px; letter-spacing: .16em; color: var(--muted); text-transform: uppercase; font-weight: 600; }
+  td.email { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+  .status { font-size: 11px; letter-spacing: .1em; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .status.active { color: var(--green); }
+  .status.inactive { color: var(--muted); }
+  .toggle { padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--text-2); cursor: pointer; font-size: 12px; transition: all .14s ease; }
+  .toggle:hover { border-color: var(--line-strong); }
+  .toggle.on  { color: var(--green);  border-color: rgba(48,209,88,.35);  background: rgba(48,209,88,.10); }
+  .toggle.off { color: #ffb86c;       border-color: rgba(255,184,108,.35); background: rgba(255,184,108,.10); }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div>
+      <h1>NestickTech <span class="tag">Admin</span></h1>
+      <p>SkelerSecurity Intelligence Engine</p>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <span id="who" class="pill idle">VERIFYING…</span>
+    <button id="backBtn" class="ghost" type="button">Back to app</button>
+    <button id="logoutBtn" class="ghost" type="button">Sign out</button>
+  </div>
+</header>
+
+<main>
+  <div class="admin-wrap">
+    <h2>Subscription admin</h2>
+    <p class="muted">Grant or revoke scraping access by email. Roles and plans live in the database — changes apply instantly.</p>
+
+    <div id="adminErr" class="banner hidden"></div>
+
+    <aside class="panel grant-form">
+      <label>Email
+        <input type="email" id="g-email" placeholder="agent@nesticktech.io" spellcheck="false" autocomplete="off">
+      </label>
+      <label>Plan
+        <select id="g-plan">
+          <option value="pro">pro</option>
+          <option value="business">business</option>
+          <option value="enterprise">enterprise</option>
+          <option value="free">free</option>
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" id="g-active" checked> Active</label>
+      <button id="grantBtn" class="primary" type="button">Set subscription</button>
+    </aside>
+
+    <section class="panel">
+      <div class="toolbar" style="margin-bottom:14px">
+        <input id="search" type="search" placeholder="Filter by email or name…">
+        <button id="refreshBtn" class="ghost" type="button">Refresh</button>
+      </div>
+      <div class="table-wrap" style="max-height:none;border:0">
+        <table id="users">
+          <thead>
+            <tr><th>Email</th><th>Name</th><th>Role</th><th>Plan</th><th>Status</th><th></th></tr>
+          </thead>
+          <tbody id="userRows"></tbody>
+        </table>
+        <div id="usersEmpty" class="empty hidden">
+          <p class="big">No accounts</p>
+          <p>No accounts match that search.</p>
+        </div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<script src="/config.js"></script>
+<script>
+(() => {
+  "use strict";
+
+  const $ = (s) => document.querySelector(s);
+  // Backend API origin — set to the Render service by config.js in the Vercel
+  // build; empty on same-origin (Render/local) deployments.
+  const API_BASE = (window.NESTICK_API_BASE || "").replace(/\/+$/, "");
+  let token = "";
+  try { token = localStorage.getItem("nestick.token") || ""; } catch {}
+  const authHeaders = () => (token ? { Authorization: `Bearer ${token}` } : {});
+  const ADMINS = ["admin", "administrator", "owner", "root", "superadmin"];
+
+  const esc = (s) =>
+    String(s ?? "").replace(/[&<>"']/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  function fail(msg) {
+    const el = $("#adminErr");
+    if (!el) return;
+    el.textContent = msg;
+    el.classList.remove("hidden");
+  }
+  function clearErr() { const el = $("#adminErr"); if (el) el.classList.add("hidden"); }
+
+  async function api(path, options = {}) {
+    const { headers, ...rest } = options;
+    const res = await fetch(API_BASE + path, {
+      cache: "no-store",
+      headers: { ...authHeaders(), ...headers },
+      ...rest,
+    });
+    if (res.status === 401) {
+      token = "";
+      try { localStorage.removeItem("nestick.token"); } catch {}
+      window.location.href = "/";
+      throw new Error("Session expired.");
+    }
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch { data = null; }
+    if (!res.ok) throw new Error((data && (data.error || data.message)) || ("HTTP " + res.status));
+    return data;
+  }
+
+  async function boot() {
+    const who = $("#who");
+    try {
+      const me = await api("/api/me");
+      if (!me || !me.enabled || !ADMINS.includes(String(me.role || "").toLowerCase())) {
+        who.textContent = "NOT AUTHORIZED";
+        who.className = "pill error";
+        fail("Access denied. This panel is restricted to administrator roles.");
+        return;
+      }
+      who.textContent = (me.role || "admin").toUpperCase();
+      who.className = "pill plan ok";
+    } catch (e) {
+      who.textContent = "OFFLINE";
+      who.className = "pill error";
+      fail(e.message || "Could not verify your role.");
+    }
+  }
+
+  async function loadUsers(q) {
+    clearErr();
+    const tbody = $("#userRows");
+    tbody.innerHTML = "";
+    try {
+      const data = await api("/api/admin/users" + (q ? "?q=" + encodeURIComponent(q) : ""));
+      const items = data.items || [];
+      $("#usersEmpty").classList.toggle("hidden", items.length > 0);
+      tbody.innerHTML = items.map((u) => {
+        const active = !!(u.subscription && u.subscription.active);
+        const plan = (u.plan || "free").toUpperCase();
+        return `<tr>
+          <td class="email">${esc(u.email)}</td>
+          <td>${esc(u.name) || '<span class="muted">\u2014</span>'}</td>
+          <td>${esc(u.role || "user")}</td>
+          <td><span class="pill plan ${active ? "ok" : "locked"}">${esc(plan)}</span></td>
+          <td><span class="status ${active ? "active" : "inactive"}">${active ? "ACTIVE" : "INACTIVE"}</span></td>
+          <td>
+            <button type="button" class="toggle ${active ? "off" : "on"}"
+                    data-email="${esc(u.email)}" data-active="${active ? "false" : "true"}">
+              ${active ? "Deactivate" : "Activate"}
+            </button>
+          </td>
+        </tr>`;
+      }).join("");
+      tbody.querySelectorAll(".toggle").forEach((b) =>
+        b.addEventListener("click", () => toggle(b.dataset.email, b.dataset.active === "true")));
+    } catch (e) {
+      fail(e.message || "Could not load accounts.");
+    }
+  }
+
+  async function toggle(email, active) {
+    clearErr();
+    try {
+      await api("/api/admin/subscription", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, active }),
+      });
+      await loadUsers($("#search").value.trim());
+    } catch (e) {
+      fail(e.message || "Could not update the subscription.");
+    }
+  }
+
+  const grantBtn = $("#grantBtn");
+  if (grantBtn) grantBtn.addEventListener("click", async () => {
+    clearErr();
+    const email = $("#g-email").value.trim();
+    if (!email) { fail("Enter an email address."); return; }
+    grantBtn.disabled = true;
+    try {
+      await api("/api/admin/subscription", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, active: $("#g-active").checked, plan: $("#g-plan").value }),
+      });
+      $("#g-email").value = "";
+      await loadUsers($("#search").value.trim());
+    } catch (e) {
+      fail(e.message || "Could not set the subscription.");
+    } finally {
+      grantBtn.disabled = false;
+    }
+  });
+
+  let searchTimer = null;
+  $("#search").addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => loadUsers($("#search").value.trim()), 250);
+  });
+  $("#refreshBtn").addEventListener("click", () => loadUsers($("#search").value.trim()));
+  $("#backBtn").addEventListener("click", () => { window.location.href = "/"; });
+  $("#logoutBtn").addEventListener("click", () => {
+    token = "";
+    try { localStorage.removeItem("nestick.token"); } catch {}
+    window.location.href = "/";
+  });
+
+  boot();
+  loadUsers("");
+})();
+</script>
+</body>
+</html>

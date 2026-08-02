@@ -39,4 +39,10 @@ if (patched === html) {
 }
 fs.writeFileSync(path.join(DIST, "index.html"), patched, "utf8");
 
+// admin.html references /config.js directly, so it works as-is at /admin.html.
+const adminSrc = path.join(SRC, "admin.html");
+if (fs.existsSync(adminSrc)) {
+  fs.writeFileSync(path.join(DIST, "admin.html"), fs.readFileSync(adminSrc, "utf8"), "utf8");
+}
+
 console.log(`Built ${DIST}: assets + config.js (NESTICK_API_BASE=${API_BASE || "(same-origin)"})`);

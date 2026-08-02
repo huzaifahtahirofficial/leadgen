@@ -34,20 +34,83 @@ class StubCollection:
 
 
 class StubUsers:
-    """An in-memory users collection (find_one + insert_one) for register tests."""
+    """An in-memory users collection for register + admin tests.
 
-    def __init__(self):
-        self._users: list[dict] = []
+    Understands the query shapes the code uses: exact ``_id``, ``$or``
+    email/username/name ``$regex`` clauses (compiled case-insensitively), and
+    an empty query (everything).
+    """
+
+    def __init__(self, users=None):
+        self._users: list[dict] = list(users or [])
         self.calls = 0
+
+    @staticmethod
+    def _clause_hits(user, clause):
+        import re
+
+        for field, cond in clause.items():
+            if not isinstance(cond, dict) or "$regex" not in cond:
+                continue
+            opts = cond.get("$options") or ""
+            flags = re.IGNORECASE if "i" in opts else 0
+            try:
+                rx = re.compile(cond["$regex"], flags)
+            except re.error:
+                continue
+            value = str(user.get(field) or "")
+            if field in ("username", "email") and not value:
+                value = str(user.get("email") or user.get("username") or "")
+            if rx.search(value):
+                return True
+        return False
+
+    def _match(self, query):
+        if not query:
+            return list(self._users)
+        if "_id" in query:
+            return [u for u in self._users if str(u.get("_id")) == str(query["_id"])]
+        if query.get("$or"):
+            return [u for u in self._users
+                    if any(self._clause_hits(u, c) for c in query["$or"])]
+        return list(self._users)
 
     def find_one(self, query):
         self.calls += 1
-        return dict(self._users[0]) if self._users else None
+        target = self._match(query)
+        return dict(target[0]) if target else None
 
     def insert_one(self, doc):
         self.calls += 1
         self._users.append(doc)
         return type("R", (), {"inserted_id": "u-reg"})()
+
+    def find(self, query):
+        self.calls += 1
+        rows = [dict(u) for u in self._match(query)]
+
+        class Cursor:
+            def __init__(self, rows):
+                self._rows = list(rows)
+
+            def sort(self, key, direction=1):
+                return self
+
+            def limit(self, n):
+                return self._rows[:max(1, n)]
+
+        return Cursor(rows)
+
+    def update_one(self, query, update):
+        self.calls += 1
+        import copy
+
+        for u in self._users:
+            if str(u.get("_id")) == str(query.get("_id")):
+                for k, v in update.get("$set", {}).items():
+                    u[k] = copy.deepcopy(v)
+                return type("R", (), {"matched_count": 1, "modified_count": 1})()
+        return type("R", (), {"matched_count": 0, "modified_count": 0})()
 
 
 def _bcrypt_hash(password: str) -> str:
@@ -495,3 +558,222 @@ def test_preflight_allows_authorization_header(enabled, monkeypatch):
             assert "authorization" in allowed
     finally:
         httpd.shutdown()
+
+
+# --------------------------------------------------------------------------- #
+# Admin panel: list accounts and grant/revoke subscriptions by email
+# --------------------------------------------------------------------------- #
+def _admin_doc(email="boss@b.co"):
+    return {"_id": "u-boss", "email": email, "password": _bcrypt_hash("pw"),
+            "role": "admin", "plan": "free", "subscription": {"active": False}}
+
+
+class TestAdminHelpers:
+    def test_set_subscription_grant_by_email(self, enabled, monkeypatch):
+        user = {"_id": "u1", "email": "a@b.co", "role": "user", "plan": "free",
+                "subscription": {"active": False, "plan": "free", "expiresAt": None}}
+        users = StubUsers([user])
+        monkeypatch.setattr(auth, "_users_collection", lambda: users)
+        out = auth.set_subscription("a@b.co", True, "pro")
+        assert out is not None
+        assert auth.can_scrape(out) is True
+        assert users._users[0]["plan"] == "pro"
+        assert users._users[0]["subscription"]["active"] is True
+
+    def test_set_subscription_revoke_is_case_insensitive(self, enabled, monkeypatch):
+        user = {"_id": "u1", "email": "a@b.co", "role": "user", "plan": "pro",
+                "subscription": {"active": True, "plan": "pro", "expiresAt": None}}
+        users = StubUsers([user])
+        monkeypatch.setattr(auth, "_users_collection", lambda: users)
+        out = auth.set_subscription("A@B.CO", False)
+        assert out is not None
+        assert auth.can_scrape(out) is False
+        assert users._users[0]["subscription"]["active"] is False
+
+    def test_set_subscription_unknown_email(self, enabled, monkeypatch):
+        monkeypatch.setattr(auth, "_users_collection", lambda: StubUsers([]))
+        assert auth.set_subscription("nobody@b.co", True) is None
+        assert "No account found" in auth.last_error
+
+    def test_set_subscription_clears_stale_expiry_on_grant(self, enabled, monkeypatch):
+        user = {"_id": "u1", "email": "a@b.co", "role": "user", "plan": "pro",
+                "subscription": {"active": True, "plan": "pro",
+                                 "expiresAt": "2020-01-01T00:00:00Z"}}
+        users = StubUsers([user])
+        monkeypatch.setattr(auth, "_users_collection", lambda: users)
+        out = auth.set_subscription("a@b.co", True)
+        assert auth.can_scrape(out) is True
+        assert users._users[0]["subscription"]["expiresAt"] is None
+
+    def test_list_users_excludes_passwords(self, enabled, monkeypatch):
+        users = StubUsers([{"_id": "u1", "email": "a@b.co", "password": "hash",
+                            "role": "user", "plan": "pro",
+                            "subscription": {"active": True}}])
+        monkeypatch.setattr(auth, "_users_collection", lambda: users)
+        rows = auth.list_users()
+        assert rows is not None and len(rows) == 1
+        assert rows[0]["email"] == "a@b.co"
+        assert rows[0]["subscription"]["active"] is True
+        assert "password" not in rows[0]
+
+    def test_list_users_db_down_returns_none(self, enabled, monkeypatch):
+        def boom(query):
+            raise RuntimeError("no server")
+
+        coll = type("C", (), {"find": staticmethod(boom)})()
+        monkeypatch.setattr(auth, "_users_collection", lambda: coll)
+        assert auth.list_users() is None
+        assert auth.last_error.startswith("Auth database unreachable")
+
+
+class TestAdminApi:
+    def test_users_list_requires_admin_role(self, http):
+        _, login = _json(http, "/api/login", method="POST",
+                         body={"email": "a@b.co", "password": "pw"})
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            _json(http, "/api/admin/users", token=login["token"])
+        assert exc.value.code == 403
+
+    def test_users_list_as_admin(self, enabled, monkeypatch):
+        user = {"_id": "u1", "email": "a@b.co", "password": _bcrypt_hash("pw"),
+                "role": "user", "plan": "free",
+                "subscription": {"active": False, "plan": "free"}}
+        monkeypatch.setattr(auth, "_users_collection",
+                            lambda: StubUsers([_admin_doc(), user]))
+        httpd, base = _serve()
+        try:
+            _, login = _json(base, "/api/login", method="POST",
+                             body={"email": "boss@b.co", "password": "pw"})
+            status, data = _json(base, "/api/admin/users", token=login["token"])
+            assert status == 200
+            assert len(data["items"]) == 2
+            by_email = {r["email"]: r for r in data["items"]}
+            assert "password" not in by_email["a@b.co"]
+            assert by_email["a@b.co"]["subscription"]["active"] is False
+        finally:
+            httpd.shutdown()
+
+    def test_subscription_grant_then_revoke(self, enabled, monkeypatch):
+        user = {"_id": "u1", "email": "a@b.co", "password": _bcrypt_hash("pw"),
+                "role": "user", "plan": "free",
+                "subscription": {"active": False, "plan": "free", "expiresAt": None}}
+        monkeypatch.setattr(auth, "_users_collection",
+                            lambda: StubUsers([_admin_doc(), user]))
+        httpd, base = _serve()
+        try:
+            _, login = _json(base, "/api/login", method="POST",
+                             body={"email": "boss@b.co", "password": "pw"})
+            status, data = _json(base, "/api/admin/subscription", method="POST",
+                                 token=login["token"],
+                                 body={"email": "a@b.co", "active": True, "plan": "pro"})
+            assert status == 200 and data["user"]["can_scrape"] is True
+            status, data = _json(base, "/api/admin/subscription", method="POST",
+                                 token=login["token"],
+                                 body={"email": "A@B.CO", "active": False})
+            assert status == 200 and data["user"]["can_scrape"] is False
+        finally:
+            httpd.shutdown()
+
+    def test_subscription_unknown_email_404(self, enabled, monkeypatch):
+        monkeypatch.setattr(auth, "_users_collection",
+                            lambda: StubUsers([_admin_doc()]))
+        httpd, base = _serve()
+        try:
+            _, login = _json(base, "/api/login", method="POST",
+                             body={"email": "boss@b.co", "password": "pw"})
+            with pytest.raises(urllib.error.HTTPError) as exc:
+                _json(base, "/api/admin/subscription", method="POST",
+                      token=login["token"],
+                      body={"email": "nobody@b.co", "active": True})
+            assert exc.value.code == 404
+        finally:
+            httpd.shutdown()
+
+    def test_admin_api_requires_auth_to_be_enabled(self, monkeypatch):
+        monkeypatch.setattr(auth, "AUTH_MONGODB_URI", None)
+        monkeypatch.setattr(auth, "JWT_SECRET", None)
+        httpd, base = _serve()
+        try:
+            with pytest.raises(urllib.error.HTTPError) as exc:
+                _json(base, "/api/admin/users")
+            assert exc.value.code == 501
+        finally:
+            httpd.shutdown()
+
+
+class TestAdminSecurity:
+    """The admin surface must be inert without a valid admin bearer token."""
+
+    def test_subscription_requires_token(self, http):
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            _json(http, "/api/admin/subscription", method="POST",
+                  body={"email": "a@b.co", "active": True})
+        assert exc.value.code == 401
+
+    def test_users_list_requires_token(self, http):
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            _json(http, "/api/admin/users")
+        assert exc.value.code == 401
+
+    def test_admin_grant_blocks_cross_site_origin(self, enabled, monkeypatch):
+        monkeypatch.setattr(auth, "_users_collection",
+                            lambda: StubUsers([_admin_doc()]))
+        httpd, base = _serve()
+        try:
+            _, login = _json(base, "/api/login", method="POST",
+                             body={"email": "boss@b.co", "password": "pw"})
+            req = urllib.request.Request(
+                base + "/api/admin/subscription",
+                data=json.dumps({"email": "a@b.co", "active": True}).encode(),
+                headers={"Content-Type": "application/json",
+                         "Authorization": f"Bearer {login['token']}",
+                         "Origin": "https://evil.example.com"},
+                method="POST")
+            with pytest.raises(urllib.error.HTTPError) as exc:
+                urllib.request.urlopen(req, timeout=5)
+            assert exc.value.code == 403
+            ctype = exc.value.headers.get("Content-Type") or ""
+            assert "json" in ctype
+            body = json.loads(exc.value.read())
+            assert body["ok"] is False
+        finally:
+            httpd.shutdown()
+
+    def test_admin_list_blocks_cross_site_origin(self, enabled, monkeypatch):
+        monkeypatch.setattr(auth, "_users_collection",
+                            lambda: StubUsers([_admin_doc()]))
+        httpd, base = _serve()
+        try:
+            _, login = _json(base, "/api/login", method="POST",
+                             body={"email": "boss@b.co", "password": "pw"})
+            req = urllib.request.Request(
+                base + "/api/admin/users",
+                headers={"Authorization": f"Bearer {login['token']}",
+                         "Origin": "https://evil.example.com"})
+            with pytest.raises(urllib.error.HTTPError) as exc:
+                urllib.request.urlopen(req, timeout=5)
+            assert exc.value.code == 403
+        finally:
+            httpd.shutdown()
+
+    def test_admin_panel_exposes_no_account_secrets(self, enabled, monkeypatch):
+        # The list rows and profiles never include the password hash.
+        users = StubUsers([_admin_doc(), {
+            "_id": "u1", "email": "victim@b.co", "name": "Victim",
+            "password": "$2b$10$secretsecretsecretsecretsecre",
+            "role": "user", "plan": "free",
+            "subscription": {"active": False}}])
+        monkeypatch.setattr(auth, "_users_collection", lambda: users)
+        httpd, base = _serve()
+        try:
+            _, login = _json(base, "/api/login", method="POST",
+                             body={"email": "boss@b.co", "password": "pw"})
+            status, data = _json(base, "/api/admin/users", token=login["token"])
+            assert status == 200
+            blob = json.dumps(data)
+            assert "secretsecretsecret" not in blob
+            assert "$2b$" not in blob
+            _, me = _json(base, "/api/me", token=login["token"])
+            assert "password" not in me
+        finally:
+            httpd.shutdown()

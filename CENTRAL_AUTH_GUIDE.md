@@ -152,3 +152,20 @@ from the DB document, and **scraping is restricted to subscribed accounts** —
 New accounts always start `plan: "free"` with `subscription.active: false`, so
 out-of-the-box a registered user cannot scrape until an admin grants a plan.
 When auth is not configured the app runs exactly as before (no login, no gating).
+
+## Admin Panel
+
+A small admin panel lives at **`/admin.html`** (reachable via the **Admin**
+button in the top bar, which only appears for admin roles). Admins work with
+**emails only** — no passwords, no account creation:
+
+- `GET /api/admin/users?q=…` — list accounts (email, name, role, plan,
+  subscription status), filterable by email/name.
+- `POST /api/admin/subscription` with `{ "email": "...", "active": true/false,
+  "plan": "pro" }` — grant or revoke subscription access for that email;
+  unknown emails return 404. `expiresAt` (ISO-8601 / epoch) is optional.
+
+Both endpoints require a bearer token whose account `role` is an admin role
+(`admin / administrator / owner / root / superadmin`), assigned in the
+database. The UI's *Activate / Deactivate* buttons call the same endpoint, and
+the *Set subscription* form grants by email in one go.

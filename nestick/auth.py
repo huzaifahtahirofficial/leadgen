@@ -416,3 +416,98 @@ def public_profile(user: dict[str, Any]) -> dict[str, Any]:
         "subscription": sub,
         "can_scrape": can_scrape(user),
     }
+
+
+# --------------------------------------------------------------------------- #
+# Admin helpers (role-gated by the API; admins act on accounts by email)
+# --------------------------------------------------------------------------- #
+def list_users(search: str = "", limit: int = 100) -> list[dict[str, Any]] | None:
+    """Admin helper: list account rows, never exposing the password hash.
+
+    ``search`` matches a case-insensitive substring of email or name. Returns
+    a list of safe rows, or None when the auth database is unreachable (the
+    reason is left in ``last_error``).
+    """
+    global last_error
+    last_error = None
+    if not enabled():
+        last_error = "Authentication is not enabled (AUTH_MONGODB_URI/JWT_SECRET missing)."
+        return None
+    query: dict[str, Any] = {}
+    search = (search or "").strip()
+    if search:
+        esc = re.escape(search)
+        query = {"$or": [
+            {"email": {"$regex": esc, "$options": "i"}},
+            {"name": {"$regex": esc, "$options": "i"}},
+        ]}
+    try:
+        cap = max(1, min(int(limit or 100), 500))
+        cursor = _users_collection().find(query).sort("email", 1).limit(cap)
+        rows: list[dict[str, Any]] = []
+        for user in cursor:
+            sub = subscription_status(user)
+            rows.append({
+                "id": str(user.get("_id") or ""),
+                "email": user.get("email") or user.get("username") or "",
+                "name": user.get("name") or "",
+                "role": user.get("role") or "user",
+                "plan": sub["plan"],
+                "subscription": sub,
+            })
+        return rows
+    except Exception as exc:  # noqa: BLE001
+        last_error = f"Auth database unreachable: {type(exc).__name__}: {exc}"
+        log.error("Auth DB unavailable: %s", exc)
+        return None
+
+
+def set_subscription(email: str, active: bool, plan: str | None = None,
+                     expires_at: Any = None) -> dict[str, Any] | None:
+    """Admin helper: grant or revoke a user's subscription by email.
+
+    Only the email is required. ``plan`` defaults to the account's current
+    plan; ``expires_at`` is an optional ISO-8601 string / epoch number /
+    datetime. Returns the updated user document, or None on failure (the
+    reason is left in ``last_error``).
+    """
+    global last_error
+    last_error = None
+    if not enabled():
+        last_error = "Authentication is not enabled (AUTH_MONGODB_URI/JWT_SECRET missing)."
+        return None
+    email = (email or "").strip().lower()
+    if not email:
+        last_error = "An email address is required."
+        return None
+    try:
+        coll = _users_collection()
+        esc = re.escape(email)
+        user = coll.find_one({"$or": [
+            {"email": {"$regex": f"^{esc}$", "$options": "i"}},
+            {"username": {"$regex": f"^{esc}$", "$options": "i"}},
+        ]})
+        if not user:
+            last_error = f"No account found for that email ({email})."
+            return None
+        current_plan = str(user.get("plan") or "free").strip() or "free"
+        plan = (plan or "").strip() or current_plan
+        sub = dict(user.get("subscription") or {})
+        sub["active"] = bool(active)
+        sub["plan"] = plan
+        if expires_at is not None and str(expires_at).strip():
+            sub["expiresAt"] = expires_at
+        elif bool(active):
+            sub["expiresAt"] = None  # a fresh grant clears any stale expiry
+        result = coll.update_one(
+            {"_id": user["_id"]},
+            {"$set": {"plan": plan, "subscription": sub}},
+        )
+        if not result.matched_count:
+            last_error = f"No account found for that email ({email})."
+            return None
+        return user_by_id(user["_id"])
+    except Exception as exc:  # noqa: BLE001
+        last_error = f"Auth database unreachable: {type(exc).__name__}: {exc}"
+        log.error("Auth DB unavailable: %s", exc)
+        return None

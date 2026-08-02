@@ -67,6 +67,16 @@
     return !!(me && me.enabled && !me.can_scrape);
   }
 
+  const ADMIN_ROLES = ["admin", "administrator", "owner", "root", "superadmin"];
+
+  function applyRole() {
+    const btn = $("#adminBtn");
+    if (!btn) return;
+    const isAdmin = !!(me && me.enabled &&
+      ADMIN_ROLES.includes(String(me.role || "").toLowerCase()));
+    btn.classList.toggle("hidden", !isAdmin);
+  }
+
   function setPill(cls, text) {
     pill.className = "pill " + cls;
     pill.textContent = text;
@@ -414,6 +424,7 @@
   function applyPlan() {
     const pill = $("#planPill");
     const banner = $("#subBanner");
+    applyRole();
     if (!me) {
       if (pill) pill.classList.add("hidden");
       if (banner) banner.classList.add("hidden");
@@ -502,6 +513,11 @@
 
   document.querySelectorAll(".gm").forEach((b) =>
     b.addEventListener("click", () => setLoginMode(b.dataset.gm)));
+
+  const adminBtn = $("#adminBtn");
+  if (adminBtn) adminBtn.addEventListener("click", () => {
+    window.location.href = "admin.html";
+  });
 
   const logoutBtn = $("#logoutBtn");
   if (logoutBtn) logoutBtn.addEventListener("click", () => {

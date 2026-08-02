@@ -17,11 +17,15 @@ API
 ``POST /api/login``           credentials -> JWT (public, opt-in auth)
 ``POST /api/register``        create account -> JWT (public, opt-in auth)
 ``GET  /api/me``              profile + subscription state (bearer token)
+``GET  /admin.html``          admin panel (static page; API is role-gated)
+``GET  /api/admin/users``     list accounts + subscription state (admin)
+``POST /api/admin/subscription``  grant/revoke subscription by email (admin)
 
 With central auth enabled (AUTH_MONGODB_URI + JWT_SECRET), every /api/* route
 except /api/login, /api/register and /api/auth-status requires a bearer token,
-and POST /api/start additionally requires an active subscription (or an
-admin/owner role) — see CENTRAL_AUTH_GUIDE.md.
+POST /api/start additionally requires an active subscription (or an
+admin/owner role), and /api/admin/* requires an admin role — see
+CENTRAL_AUTH_GUIDE.md.
 """
 
 from __future__ import annotations
@@ -533,6 +537,27 @@ def make_handler(jobs: JobManager) -> type[BaseHTTPRequestHandler]:
                 self._fail(401, "That account no longer exists.")
             return None
 
+        def _require_admin(self) -> dict[str, Any] | None:
+            """Return the admin user document, or send the error and return None.
+
+            Admin endpoints only make sense with central auth on; without it
+            there are no roles to check, so the API answers 501. With auth on,
+            the caller must hold a valid token for an account whose ``role`` is
+            in :data:`auth.ADMIN_ROLES` (assigned in the database).
+            """
+            if not auth.enabled():
+                self._fail(501, "The admin API requires central auth to be enabled "
+                                "(AUTH_MONGODB_URI + JWT_SECRET).")
+                return None
+            user = self._current_user()
+            if user is None:
+                return None  # _current_user already sent the error
+            if str(user.get("role") or "").strip().lower() not in auth.ADMIN_ROLES:
+                self._fail(403, "Administrator access required. Your account role "
+                                "does not allow this.")
+                return None
+            return user
+
         MAX_BODY = 2_000_000
 
         def _body(self) -> dict[str, Any]:
@@ -598,6 +623,8 @@ def make_handler(jobs: JobManager) -> type[BaseHTTPRequestHandler]:
                 return
             if path in ("/", "/index.html"):
                 self._static("index.html")
+            elif path in ("/admin", "/admin.html"):
+                self._static("admin.html")
             elif path.startswith("/static/"):
                 self._static(path[len("/static/"):])
             elif path == "/api/me":
@@ -613,6 +640,19 @@ def make_handler(jobs: JobManager) -> type[BaseHTTPRequestHandler]:
                                 "can_scrape": True})
                 else:
                     self._json({"enabled": True, **auth.public_profile(user)})
+            elif path == "/api/admin/users":
+                if self._require_admin() is None:
+                    return
+                qs = urlsplit(self.path).query
+                q = ""
+                for part in qs.split("&"):
+                    if part.startswith("q="):
+                        q = unquote(part[3:])
+                rows = auth.list_users(q)
+                if rows is None:
+                    self._fail(503, auth.last_error or "Could not list accounts.")
+                    return
+                self._json({"items": rows})
             elif path == "/api/status":
                 qs = urlsplit(self.path).query
                 idx = 0
@@ -689,6 +729,27 @@ def make_handler(jobs: JobManager) -> type[BaseHTTPRequestHandler]:
             elif path == "/api/settings":
                 save_config(self._body())
                 self._json({"ok": True})
+            elif path == "/api/admin/subscription":
+                if self._require_admin() is None:
+                    return
+                body = self._body()
+                user = auth.set_subscription(
+                    str(body.get("email") or ""),
+                    bool(body.get("active")),
+                    str(body.get("plan") or "") or None,
+                    body.get("expiresAt"),
+                )
+                if user is None:
+                    reason = auth.last_error or "Could not update the subscription."
+                    if reason.startswith("Auth database unreachable"):
+                        status = 503
+                    elif "No account found" in reason:
+                        status = 404
+                    else:
+                        status = 400
+                    self._fail(status, reason)
+                    return
+                self._json({"ok": True, "user": auth.public_profile(user)})
             else:
                 self._fail(404, f"Unknown endpoint: {path}")
 

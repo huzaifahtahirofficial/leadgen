@@ -45,6 +45,14 @@ pill in the top bar, a "Subscription required" banner, and a disabled
 **Start scraping** button. `POST /api/start` enforces the same rule server-side,
 so the gate holds even if the UI is bypassed.
 
+## Admin panel
+
+`/admin.html` (a second static page, copied into `dist/` by `build.js`) is the
+subscription admin: admins see an **Admin** button in the top bar and can list
+accounts and grant/revoke subscriptions by email. The panel only loads for
+admin roles and calls the Render API (`/api/admin/*`), which enforces the role
+check server-side.
+
 ## Security note
 
 The Render backend allows cross-origin calls from `.vercel.app`, `.onrender.com`
