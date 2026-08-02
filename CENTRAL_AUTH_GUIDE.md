@@ -4,6 +4,15 @@ This project is configured to support a **Centralized Authentication Database** 
 
 By doing this, you can connect multiple different platforms or applications to the same `AUTH_MONGODB_URI`. All platforms will then share the same pool of users, meaning if a user creates an account on one platform, they can log into any other platform using the exact same email and password (provided they share the same `JWT_SECRET`).
 
+## Facts about the shared identity store (verified against KeywordSearch)
+
+- The accounts live in a collection named **`User Accounts`** (note the space and capitals — set in `Backend/models/User.js` as `collection: 'User Accounts'`).
+- `email` is stored lowercased; `password` is a bcrypt hash (bcryptjs, salt rounds 10, `$2a$` prefix); `name` and `role` (`user`/`admin`) are plain strings.
+- JWTs are signed HS256 with the shared `JWT_SECRET` and carry a **`userId`** claim (the `_id` string): `jsonwebtoken.sign({ userId }, JWT_SECRET, { expiresIn: '7d' })`. Verifiers look the user up with `User.findById(decoded.userId)`.
+- App-specific data (e.g. credits) is nested under `apps.<appName>` on the user document, never at the root.
+
+Python consumers (like Nestick) honor this in `nestick/auth.py`: the collection is configurable via `AUTH_MONGODB_COLLECTION` (default `User Accounts`), and tokens issued by `issue_token()` include `userId` so Node platforms accept them.
+
 ## Environment Variables Setup
 
 In your backend's root directory, locate or create your `.env` file. You need to define two separate MongoDB URIs:

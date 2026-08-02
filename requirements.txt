@@ -12,8 +12,9 @@ brotli>=1.1             # brotli-compressed responses
 # Uncomment if you want it (needs a system webview: WebKitGTK / WebView2 / Cocoa).
 # pywebview>=5.0
 
-# Optional: centralized authentication (CENTRAL_AUTH_GUIDE.md) — login page +
-# JWT bearer checks against AUTH_MONGODB_URI. The server runs without these.
-# pymongo>=4.6
-# bcrypt>=4.0
-# PyJWT>=2.8
+# Centralized authentication (CENTRAL_AUTH_GUIDE.md) — login page + JWT bearer
+# checks against AUTH_MONGODB_URI. Safe to keep installed; auth only activates
+# when AUTH_MONGODB_URI and JWT_SECRET are both set.
+pymongo>=4.6
+bcrypt>=4.0
+PyJWT>=2.8

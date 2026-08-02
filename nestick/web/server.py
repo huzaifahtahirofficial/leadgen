@@ -534,6 +534,10 @@ def make_handler(jobs: JobManager) -> type[BaseHTTPRequestHandler]:
             path = unquote(urlsplit(self.path).path)
             if path.startswith("/api/") and self._deny_cross_site():
                 return
+            if path == "/api/auth-status":
+                # Public probe: is auth on, and can we reach the auth DB?
+                self._json(auth.db_status())
+                return
             if path.startswith("/api/") and not self._authed():
                 return
             if path in ("/", "/index.html"):
@@ -614,7 +618,8 @@ def make_handler(jobs: JobManager) -> type[BaseHTTPRequestHandler]:
 
             Stays public so the login screen can obtain a token. When central
             auth is not configured it responds 501 so the UI knows it is
-            running without authentication.
+            running without authentication. Distinguishes a wrong password
+            (401) from an unreachable database (503).
             """
             if not auth.enabled():
                 self._fail(501, "Authentication is not enabled on this server.")
@@ -625,7 +630,9 @@ def make_handler(jobs: JobManager) -> type[BaseHTTPRequestHandler]:
                 str(body.get("password") or ""),
             )
             if not user:
-                self._fail(401, "Invalid email or password.")
+                reason = auth.last_error or "Invalid email or password."
+                status = 503 if reason.startswith("Auth database unreachable") else 401
+                self._fail(status, reason)
                 return
             self._json({"ok": True, "token": auth.issue_token(user),
                         "email": user.get("email") or user.get("username")})
