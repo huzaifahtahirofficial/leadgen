@@ -84,8 +84,15 @@ class ResponseCache:
         self._db: sqlite3.Connection | None = None
         if not enabled:
             return
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        self._db = sqlite3.connect(path, check_same_thread=False, timeout=30)
+        try:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            self._db = sqlite3.connect(path, check_same_thread=False, timeout=30)
+        except (OSError, sqlite3.Error):
+            # Cache dir unwritable (e.g. a Render disk that isn't attached on
+            # free tier) — keep scraping, just without a persistent cache.
+            self.enabled = False
+            self._db = None
+            return
         self._db.executescript(self._SCHEMA)
         with contextlib.suppress(sqlite3.DatabaseError):
             self._db.execute("PRAGMA journal_mode=WAL")

@@ -44,7 +44,33 @@ from ..utils import log
 from .. import auth
 
 STATIC = Path(__file__).parent / "static"
-CONFIG_DIR = Path(os.environ.get("NESTICK_CONFIG_DIR", Path.home() / ".nestick"))
+
+
+def _pick_writable_dir(preferred: Path, fallback: Path) -> Path:
+    """Return the first directory that can actually be written to.
+
+    Lets the app survive a configured-but-unavailable mount (e.g. the Render
+    disk at /var/data is only attached on paid plans; on free tier the path
+    does not exist and cannot be created by a non-root process).
+    """
+    for candidate in (preferred, fallback):
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            probe = candidate / ".nestick-write-test"
+            probe.write_text("ok", "utf-8")
+            probe.unlink()
+            return candidate
+        except OSError:
+            continue
+    tmp = Path(tempfile.gettempdir()) / "nestick"
+    tmp.mkdir(parents=True, exist_ok=True)
+    return tmp
+
+
+CONFIG_DIR = _pick_writable_dir(
+    Path(os.environ.get("NESTICK_CONFIG_DIR", Path.home() / ".nestick")),
+    Path.home() / ".nestick",
+)
 CONFIG_FILE = CONFIG_DIR / "config.json"
 SECRET_KEYS = ("serpapi_key", "hunter_key", "google_maps_key", "numverify_key")
 
