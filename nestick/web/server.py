@@ -14,6 +14,14 @@ API
 ``GET  /api/settings``        stored API keys
 ``POST /api/settings``        persist API keys
 ``GET  /api/download/<fmt>``  csv | json | jsonl | xlsx | md | db
+``POST /api/login``           credentials -> JWT (public, opt-in auth)
+``POST /api/register``        create account -> JWT (public, opt-in auth)
+``GET  /api/me``              profile + subscription state (bearer token)
+
+With central auth enabled (AUTH_MONGODB_URI + JWT_SECRET), every /api/* route
+except /api/login, /api/register and /api/auth-status requires a bearer token,
+and POST /api/start additionally requires an active subscription (or an
+admin/owner role) — see CENTRAL_AUTH_GUIDE.md.
 """
 
 from __future__ import annotations
@@ -454,7 +462,7 @@ def make_handler(jobs: JobManager) -> type[BaseHTTPRequestHandler]:
             self.send_response(204)
             self._set_cors()
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
             self.send_header("Access-Control-Max-Age", "86400")
             self.send_header("Content-Length", "0")
             self.end_headers()
@@ -502,6 +510,28 @@ def make_handler(jobs: JobManager) -> type[BaseHTTPRequestHandler]:
             self._fail(401, "Authentication required. POST your credentials to "
                             "/api/login to obtain a token.")
             return False
+
+        def _current_user(self) -> dict[str, Any] | None:
+            """Live user document for the bearer token.
+
+            Returns None when auth is disabled (the caller decides what to
+            report). When auth is enabled the token has already passed
+            ``_authed()``, so a None here means the account was deleted (401)
+            or the auth database went down (503) — the error is sent here.
+            """
+            if not auth.enabled():
+                return None
+            claims = auth.verify_token(auth.bearer_token(self.headers.get("Authorization")))
+            if not claims:
+                return None
+            user = auth.user_by_id(claims.get("userId"))
+            if user is not None:
+                return user
+            if auth.last_error and auth.last_error.startswith("Auth database unreachable"):
+                self._fail(503, auth.last_error)
+            else:
+                self._fail(401, "That account no longer exists.")
+            return None
 
         MAX_BODY = 2_000_000
 
@@ -570,6 +600,19 @@ def make_handler(jobs: JobManager) -> type[BaseHTTPRequestHandler]:
                 self._static("index.html")
             elif path.startswith("/static/"):
                 self._static(path[len("/static/"):])
+            elif path == "/api/me":
+                # Profile + subscription state so the UI can gate scraping.
+                user = self._current_user()
+                if user is None and auth.enabled():
+                    return  # _current_user already sent the error
+                if user is None:
+                    self._json({"enabled": False, "email": None, "name": None,
+                                "role": None, "plan": "free",
+                                "subscription": {"plan": "free", "active": True,
+                                                 "expiresAt": None},
+                                "can_scrape": True})
+                else:
+                    self._json({"enabled": True, **auth.public_profile(user)})
             elif path == "/api/status":
                 qs = urlsplit(self.path).query
                 idx = 0
@@ -626,9 +669,19 @@ def make_handler(jobs: JobManager) -> type[BaseHTTPRequestHandler]:
             path = unquote(urlsplit(self.path).path)
             if path == "/api/login":
                 self._login()
+            elif path == "/api/register":
+                self._register()
             elif path.startswith("/api/") and not self._authed():
                 return
             elif path == "/api/start":
+                if auth.enabled():
+                    user = self._current_user()
+                    if user is None:
+                        return  # _current_user already sent the error
+                    if not auth.can_scrape(user):
+                        self._fail(403, "Scraping requires an active subscription. "
+                                        "Contact your administrator to enable your plan.")
+                        return
                 ok, msg = jobs.start(self._body())
                 self._json({"ok": ok, "message": msg}, 200 if ok else 400)
             elif path == "/api/stop":
@@ -661,7 +714,39 @@ def make_handler(jobs: JobManager) -> type[BaseHTTPRequestHandler]:
                 self._fail(status, reason)
                 return
             self._json({"ok": True, "token": auth.issue_token(user),
-                        "email": user.get("email") or user.get("username")})
+                        "email": user.get("email") or user.get("username"),
+                        "user": auth.public_profile(user)})
+
+        def _register(self) -> None:
+            """Public endpoint: create an account and return a JWT for it.
+
+            Kept public like /api/login so the login screen's "Create account"
+            tab can self-service. New accounts start with no active
+            subscription; roles and plans are assigned from the database by an
+            administrator (never via this endpoint).
+            """
+            if not auth.enabled():
+                self._fail(501, "Authentication is not enabled on this server.")
+                return
+            body = self._body()
+            user = auth.register_user(
+                str(body.get("name") or ""),
+                str(body.get("email") or body.get("username") or ""),
+                str(body.get("password") or ""),
+            )
+            if not user:
+                reason = auth.last_error or "Registration failed."
+                if reason.startswith("Auth database unreachable"):
+                    status = 503
+                elif "already exists" in reason:
+                    status = 409
+                else:
+                    status = 400
+                self._fail(status, reason)
+                return
+            self._json({"ok": True, "token": auth.issue_token(user),
+                        "email": user.get("email") or user.get("username"),
+                        "user": auth.public_profile(user)})
 
     return Handler
 

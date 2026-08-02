@@ -25,6 +25,9 @@
   let sortKey = "score";
   let sortDir = -1;
   let hasFiles = false;
+  let running = false;
+  let me = null;                 // { plan, can_scrape, ... } from /api/me
+  let loginMode = "signin";      // "signin" | "register" on the login gate
 
   /* ---------------- tabs ---------------- */
   document.querySelectorAll(".tab").forEach((tab) => {
@@ -50,11 +53,18 @@
   }
 
   function setRunning(on) {
-    runBtn.disabled = on;
+    running = on;
+    runBtn.disabled = on || applyLock();
     runBtn.textContent = on ? "Scraping…" : "Start scraping";
     stopBtn.classList.toggle("hidden", !on);
     bar.classList.toggle("indet", on);
     if (!on) bar.style.width = "0";
+  }
+
+  // A subscribed user (or auth-off legacy mode) may scrape; otherwise the API
+  // would reject /api/start with 403, so the button is gated up front.
+  function applyLock() {
+    return !!(me && me.enabled && !me.can_scrape);
   }
 
   function setPill(cls, text) {
@@ -200,6 +210,11 @@
     e.preventDefault();
     $("#formError").classList.add("hidden");
     $("#apiBanner").classList.add("hidden");
+    if (applyLock()) {
+      showFormError(
+        "This account has no active subscription. Contact your administrator to enable scraping.");
+      return;
+    }
     logOut.textContent = "";
     logIndex = 0;
     leads = [];
@@ -355,6 +370,7 @@
   }
 
   function showLogin() {
+    setLoginMode("signin");
     const s = $("#loginScreen");
     if (s) {
       s.classList.remove("hidden", "granted", "denied");
@@ -382,34 +398,95 @@
     if (btn) btn.classList.toggle("hidden", !token);
   }
 
+  function setLoginMode(mode) {
+    loginMode = mode;
+    document.querySelectorAll(".gm").forEach((b) => {
+      const on = b.dataset.gm === mode;
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    const nameField = $("#fieldName");
+    if (nameField) nameField.classList.toggle("hidden", mode !== "register");
+    const t = $("#loginBtnText");
+    if (t) t.textContent = mode === "register" ? "CREATE ACCOUNT" : "UNLOCK TERMINAL";
+  }
+
+  function applyPlan() {
+    const pill = $("#planPill");
+    const banner = $("#subBanner");
+    if (!me) {
+      if (pill) pill.classList.add("hidden");
+      if (banner) banner.classList.add("hidden");
+      runBtn.title = "";
+      setRunning(running);
+      return;
+    }
+    const locked = applyLock();
+    if (pill) {
+      pill.textContent = me.enabled ? (me.plan || "free").toUpperCase() : "LOCAL";
+      pill.className = "pill plan " + (locked ? "locked" : "ok");
+      pill.classList.remove("hidden");
+    }
+    if (banner) {
+      if (locked) {
+        banner.innerHTML = "<strong>Subscription required</strong>" +
+          "<p class=\"tip\">Your account is not subscribed. Scraping is disabled until an " +
+          "administrator grants your account a plan in the database. Any results already " +
+          "produced remain downloadable.</p>";
+        banner.classList.remove("hidden");
+      } else {
+        banner.classList.add("hidden");
+      }
+    }
+    runBtn.title = locked ? "Scraping requires an active subscription" : "";
+    setRunning(running);
+  }
+
+  async function refreshMe() {
+    try {
+      const data = await api(`${API_BASE}/api/me`, {}, 1);
+      me = data && typeof data === "object" ? data : null;
+    } catch {
+      me = null;
+    }
+    applyPlan();
+  }
+
   const loginForm = $("#loginForm");
   if (loginForm) loginForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     const err = $("#loginError");
     const btn = $("#loginBtn");
     const text = $("#loginBtnText");
+    const isRegister = loginMode === "register";
     if (err) err.classList.add("hidden");
     if (btn) btn.disabled = true;
-    if (text) text.textContent = "AUTHORIZING\u2026";
-    setVerif("SCANNING CREDENTIALS\u2026");
+    if (text) text.textContent = isRegister ? "CREATING\u2026" : "AUTHORIZING\u2026";
+    setVerif(isRegister ? "REGISTERING CLEARANCE\u2026" : "SCANNING CREDENTIALS\u2026");
     try {
-      const res = await fetch(`${API_BASE}/api/login`, {
+      const body = {
+        email: $("#loginEmail").value,
+        password: $("#loginPassword").value,
+      };
+      if (isRegister) body.name = $("#loginName").value;
+      const res = await fetch(`${API_BASE}${isRegister ? "/api/register" : "/api/login"}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: $("#loginEmail").value,
-          password: $("#loginPassword").value,
-        }),
+        body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.token) {
         setGate("denied", "ACCESS DENIED \u00b7 IDENTITY NOT RECOGNISED");
-        if (err) { err.textContent = data.error || "Sign in failed."; err.classList.remove("hidden"); }
+        if (err) { err.textContent = data.error || (isRegister ? "Could not create the account." : "Sign in failed."); err.classList.remove("hidden"); }
         return;
       }
       token = data.token;
       try { localStorage.setItem("nestick.token", token); } catch {}
-      setGate("granted", "ACCESS GRANTED \u00b7 IDENTITY VERIFIED");
+      me = data.user && typeof data.user === "object" ? data.user : null;
+      applyPlan();
+      setGate("granted", isRegister
+        ? "ACCESS GRANTED \u00b7 ACCOUNT CREATED"
+        : "ACCESS GRANTED \u00b7 IDENTITY VERIFIED");
       if (text) text.textContent = "ACCESS GRANTED";
       await new Promise((r) => setTimeout(r, 750));
       hideLogin();
@@ -419,15 +496,20 @@
       if (err) { err.textContent = e2 && e2.message ? e2.message : "Could not reach the server."; err.classList.remove("hidden"); }
     } finally {
       if (btn) btn.disabled = false;
-      if (text) text.textContent = "UNLOCK TERMINAL";
+      if (text) text.textContent = isRegister ? "CREATE ACCOUNT" : "UNLOCK TERMINAL";
     }
   });
+
+  document.querySelectorAll(".gm").forEach((b) =>
+    b.addEventListener("click", () => setLoginMode(b.dataset.gm)));
 
   const logoutBtn = $("#logoutBtn");
   if (logoutBtn) logoutBtn.addEventListener("click", () => {
     token = "";
+    me = null;
     try { localStorage.removeItem("nestick.token"); } catch {}
     updateAuthUI();
+    applyPlan();
     showLogin();
   });
   updateAuthUI();
@@ -621,6 +703,7 @@
   } catch {}
 
   /* resume view if a job is already running (e.g. page reload) */
+  if (token) refreshMe();
   fetch(`${API_BASE}/api/status`, { headers: authHeaders() }).then((r) => {
     if (r.status === 401) {
       token = "";

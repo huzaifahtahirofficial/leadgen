@@ -37,8 +37,11 @@ services:
       - key: NESTICK_NO_BROWSER
         value: "1"
       # Centralized authentication (CENTRAL_AUTH_GUIDE.md). When BOTH are set,
-      # the API requires a JWT and a login page is shown. Without them the app
-      # runs open. Set these in the Render dashboard (never commit secrets):
+      # the API requires a JWT, the login screen gains a "Create account" tab
+      # (/api/register), and POST /api/start is gated to subscribed accounts or
+      # admin roles (plan/subscription are set in the User Accounts collection).
+      # Without them the app runs open. Set these in the Render dashboard
+      # (never commit secrets):
       # - key: AUTH_MONGODB_URI
       # - key: JWT_SECRET
       # - key: NESTICK_JWT_EXPIRES   # optional, seconds (default 86400)

@@ -16,6 +16,13 @@ auth platform, e.g. KeywordSearch's ``Backend/models/User.js``):
     ``password`` hash, ``name`` and a ``role`` string;
   * JWTs carry a ``userId`` claim (the ``_id`` string) so tokens minted here
     are accepted by the Node platforms, which do ``User.findById(decoded.userId)``.
+
+Subscriptions are DB-driven: a user document carries ``plan`` (e.g. ``free``)
+and an optional ``subscription`` object with ``active`` and ``expiresAt``.
+Only subscribed users (or admin roles) may scrape — ``POST /api/start`` is
+gated. There is no billing provider; an administrator grants/revokes access
+by editing the document in MongoDB, and new self-service accounts from
+``POST /api/register`` always start inactive.
 """
 
 from __future__ import annotations
@@ -24,6 +31,7 @@ import logging
 import os
 import re
 import time
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
@@ -219,3 +227,192 @@ def bearer_token(header: str | None) -> str | None:
     if len(parts) == 2 and parts[0].lower() == "bearer":
         return parts[1].strip()
     return None
+
+
+# --------------------------------------------------------------------------- #
+# Accounts & subscriptions (DB-driven; an admin edits the user document)
+# --------------------------------------------------------------------------- #
+#: Plans treated as "subscribed" when the document carries a plan string but
+#: no explicit ``subscription`` object (legacy/seed accounts).
+PAID_PLANS = frozenset({"pro", "premium", "business", "enterprise", "agency", "lifetime", "paid"})
+
+#: Roles that may scrape regardless of subscription state (assigned by the
+#: database — there is no self-signup path to an admin role).
+ADMIN_ROLES = frozenset({"admin", "administrator", "owner", "root", "superadmin"})
+
+PASSWORD_MIN_LENGTH = 6
+
+
+def register_user(name: str, email: str, password: str,
+                  role: str = "user", plan: str = "free") -> dict[str, Any] | None:
+    """Create a self-service account in the central auth DB.
+
+    Mirrors the Node platform's schema (bcrypt ``password``, ``role`` string)
+    and adds ``plan`` + ``subscription`` so scraping can be gated per-account.
+    New accounts always start with an INACTIVE subscription; an administrator
+    flips ``subscription.active`` (or sets a paid ``plan``) in MongoDB to let
+    the user scrape. Never raises; failures are left in ``last_error``.
+    """
+    global last_error
+    last_error = None
+    if not enabled():
+        last_error = "Authentication is not enabled (AUTH_MONGODB_URI/JWT_SECRET missing)."
+        return None
+    email = (email or "").strip().lower()
+    name = (name or "").strip()
+    if not email or "@" not in email or "." not in email.rsplit("@", 1)[-1]:
+        last_error = "A valid email address is required."
+        return None
+    if not password or len(password) < PASSWORD_MIN_LENGTH:
+        last_error = f"Password must be at least {PASSWORD_MIN_LENGTH} characters."
+        return None
+    try:
+        import bcrypt
+
+        coll = _users_collection()
+        esc = re.escape(email)
+        existing = coll.find_one(
+            {"$or": [
+                {"email": {"$regex": f"^{esc}$", "$options": "i"}},
+                {"username": {"$regex": f"^{esc}$", "$options": "i"}},
+            ]}
+        )
+        if existing:
+            last_error = "An account already exists for that email address."
+            return None
+        doc: dict[str, Any] = {
+            "email": email,
+            "username": email,
+            "name": name or email.rsplit("@", 1)[0],
+            "password": bcrypt.hashpw(password.encode("utf-8"),
+                                      bcrypt.gensalt()).decode("utf-8"),
+            "role": role,
+            "plan": plan,
+            "subscription": {"active": False, "plan": plan, "expiresAt": None},
+            "createdAt": datetime.now(timezone.utc),
+            "provider": "nestick",
+        }
+        res = coll.insert_one(doc)
+        doc["_id"] = res.inserted_id
+        return doc
+    except Exception as exc:  # noqa: BLE001
+        last_error = f"Registration failed: {type(exc).__name__}: {exc}"
+        log.error("Registration failed: %s", exc)
+        return None
+
+
+def user_by_id(uid: Any) -> dict[str, Any] | None:
+    """Fetch a live user document by ``_id`` (accepts str or ObjectId).
+
+    Returns None when the account no longer exists; when the auth database is
+    unreachable the reason is left in ``last_error`` (prefix
+    ``Auth database unreachable``) so the API can return 503 instead of 401.
+    """
+    global last_error
+    last_error = None
+    if not enabled() or not uid:
+        return None
+    try:
+        from bson import ObjectId
+
+        coll = _users_collection()
+        query: dict[str, Any]
+        if isinstance(uid, str):
+            try:
+                query = {"_id": ObjectId(uid)}
+            except Exception:  # noqa: BLE001
+                query = {"_id": uid}
+        else:
+            query = {"_id": uid}
+        user = coll.find_one(query)
+    except Exception as exc:  # noqa: BLE001
+        last_error = f"Auth database unreachable: {type(exc).__name__}: {exc}"
+        log.error("Auth DB unavailable: %s", exc)
+        return None
+    return dict(user) if user else None
+
+
+def user_for_token(token: str) -> dict[str, Any] | None:
+    """Resolve the live user document for a bearer token (None when invalid)."""
+    claims = verify_token(token)
+    if not claims:
+        return None
+    return user_by_id(claims.get("userId"))
+
+
+def _expiry_past(value: Any) -> bool:
+    """True when an expiry value (ISO-8601 string or epoch number) is in the past."""
+    now = time.time()
+    if isinstance(value, datetime):
+        return value.timestamp() <= now
+    if isinstance(value, (int, float)):
+        ts = value
+        if ts > 1e12:  # milliseconds
+            ts /= 1000
+        return ts <= now
+    s = str(value or "").strip()
+    if not s:
+        return False
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            return float(s) <= now
+        except ValueError:
+            return False
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp() <= now
+
+
+def subscription_status(user: dict[str, Any]) -> dict[str, Any]:
+    """Derive the public subscription state for a user document.
+
+    An account is subscribed when its ``subscription`` object has ``active``
+    truthy and is not past ``expiresAt``, or (for legacy/seed docs) its
+    ``plan`` string is in :data:`PAID_PLANS`. An explicit ``subscription``
+    object overrides the plan string, so an admin can revoke access.
+    """
+    plan = str(user.get("plan") or "free").strip() or "free"
+    sub = user.get("subscription")
+    if isinstance(sub, dict):
+        active = bool(sub.get("active"))
+        expires = sub.get("expiresAt") or sub.get("expires_at") or sub.get("expires")
+    elif isinstance(sub, str):
+        active = bool(sub) and sub.strip().lower() not in ("free", "none", "inactive", "0", "false")
+        expires = None
+    else:
+        active = plan.lower() in PAID_PLANS
+        expires = None
+    if active and expires:
+        try:
+            if _expiry_past(expires):
+                active = False
+        except Exception:  # noqa: BLE001
+            pass  # unparseable expiry is treated as "no expiry set"
+    return {"plan": plan, "active": active,
+            "expiresAt": expires.strftime("%Y-%m-%dT%H:%M:%SZ") if isinstance(expires, datetime) else expires}
+
+
+def can_scrape(user: dict[str, Any]) -> bool:
+    """Whether a user may run scrapes.
+
+    Admin/owner roles (assigned in the DB) always may; everyone else needs an
+    active subscription. This is the gate applied by ``POST /api/start``.
+    """
+    if str(user.get("role") or "").strip().lower() in ADMIN_ROLES:
+        return True
+    return subscription_status(user)["active"]
+
+
+def public_profile(user: dict[str, Any]) -> dict[str, Any]:
+    """Safe, UI-facing subset of a user document (never exposes the hash)."""
+    sub = subscription_status(user)
+    return {
+        "email": user.get("email") or user.get("username") or "",
+        "name": user.get("name") or "",
+        "role": user.get("role") or "user",
+        "plan": sub["plan"],
+        "subscription": sub,
+        "can_scrape": can_scrape(user),
+    }

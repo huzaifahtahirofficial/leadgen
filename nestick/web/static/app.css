@@ -79,6 +79,9 @@ html, body {
 @keyframes pulse { 50% { opacity: .25; } }
 .pill.done  { color: var(--green); border-color: rgba(48,209,88,.35); background: rgba(48,209,88,.10); }
 .pill.error { color: var(--red); border-color: rgba(255,69,58,.35); background: rgba(255,69,58,.10); }
+.pill.plan { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; letter-spacing: .12em; }
+.pill.plan.ok     { color: var(--green); border-color: rgba(48,209,88,.35); background: rgba(48,209,88,.10); }
+.pill.plan.locked { color: #ffb86c; border-color: rgba(255,184,108,.35); background: rgba(255,184,108,.10); }
 
 /* ---------- layout ---------- */
 main { display: grid; grid-template-columns: 344px 1fr; height: calc(100vh - 62px); }
@@ -184,6 +187,10 @@ button { font: inherit; cursor: pointer; border-radius: 8px; }
 .banner ul { margin: 0; padding-left: 18px; }
 .banner li { margin: 2px 0; }
 .banner .tip { color: var(--muted); font-size: 12px; margin-top: 6px; }
+.banner.sub {
+  background: rgba(255,184,108,.08); border-color: rgba(255,184,108,.30); color: #ffd9a0;
+}
+.banner.sub strong { color: #ffb86c; }
 
 /* ---------- toolbar ---------- */
 .toolbar { display: flex; align-items: center; gap: 14px; }
@@ -465,9 +472,27 @@ code { background: var(--bg); padding: 1px 5px; border-radius: 4px; font-size: 1
 }
 @keyframes ledblink { 50% { opacity: .3; } }
 
+/* sign-in / create-account toggle */
+.gate-mode {
+  position: relative; z-index: 1;
+  display: flex; gap: 3px; padding: 3px; margin-bottom: 18px;
+  border-radius: 999px; border: 1px solid rgba(65, 224, 255, .22);
+  background: rgba(0, 0, 0, .4);
+}
+.gm {
+  flex: 1; padding: 8px; border: 0; border-radius: 999px; cursor: pointer;
+  background: transparent; color: rgba(199, 199, 204, .55);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px; letter-spacing: .18em; font-weight: 600;
+  transition: color .15s, background .15s;
+}
+.gm:hover { color: var(--text-2); }
+.gm.active { background: linear-gradient(180deg, #4cc7ff, #2ea8ff); color: #00121f; }
+
 .field { position: relative; z-index: 1; display: block; margin: 0 0 16px; }
 .field-label { display: block; margin-bottom: 7px; font-size: 10px; letter-spacing: .24em; color: rgba(199, 199, 204, .75); font-weight: 600; }
-.login-card input[type=email], .login-card input[type=password] {
+.field-label .opt { color: rgba(199, 199, 204, .45); letter-spacing: .14em; font-weight: 500; }
+.login-card input[type=email], .login-card input[type=password], .login-card input[type=text] {
   width: 100%; margin: 0; padding: 12px 14px; font-size: 14px;
   background: rgba(0, 0, 0, .5); color: var(--text);
   border: 1px solid rgba(65, 224, 255, .25); border-radius: 12px; outline: none;

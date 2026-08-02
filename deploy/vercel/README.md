@@ -31,9 +31,19 @@ disk). They never touch Vercel.
 ## Login
 
 If the Render service has `AUTH_MONGODB_URI` + `JWT_SECRET` configured, the UI
-shows a sign-in page and sends the returned JWT as `Authorization: Bearer …`
-on every API call (kept in localStorage). If auth is not enabled, the UI runs
-without a login screen.
+shows a sign-in page with a **Sign in / Create account** toggle (`/api/register`)
+and sends the returned JWT as `Authorization: Bearer …` on every API call
+(kept in localStorage). If auth is not enabled, the UI runs without a login
+screen.
+
+## Subscriptions
+
+Scraping is gated by subscription (see `CENTRAL_AUTH_GUIDE.md`): accounts start
+`plan: "free"` and cannot run scrapes until an administrator sets an active
+subscription in the `User Accounts` collection. The UI reflects this — a plan
+pill in the top bar, a "Subscription required" banner, and a disabled
+**Start scraping** button. `POST /api/start` enforces the same rule server-side,
+so the gate holds even if the UI is bypassed.
 
 ## Security note
 

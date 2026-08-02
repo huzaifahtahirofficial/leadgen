@@ -33,10 +33,35 @@ class StubCollection:
         return dict(self._user)
 
 
+class StubUsers:
+    """An in-memory users collection (find_one + insert_one) for register tests."""
+
+    def __init__(self):
+        self._users: list[dict] = []
+        self.calls = 0
+
+    def find_one(self, query):
+        self.calls += 1
+        return dict(self._users[0]) if self._users else None
+
+    def insert_one(self, doc):
+        self.calls += 1
+        self._users.append(doc)
+        return type("R", (), {"inserted_id": "u-reg"})()
+
+
 def _bcrypt_hash(password: str) -> str:
     import bcrypt
 
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+
+def _serve():
+    """Start a fresh in-process server; returns (httpd, base_url)."""
+    jobs = web.JobManager()
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), web.make_handler(jobs))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, f"http://127.0.0.1:{httpd.server_address[1]}"
 
 
 @pytest.fixture
@@ -250,5 +275,223 @@ def test_login_when_auth_disabled_is_501(monkeypatch):
             _json(base, "/api/login", method="POST",
                   body={"email": "a@b.co", "password": "pw"})
         assert exc.value.code == 501
+    finally:
+        httpd.shutdown()
+
+
+# --------------------------------------------------------------------------- #
+# Account creation + subscriptions (DB-driven plans/roles)
+# --------------------------------------------------------------------------- #
+class TestRegister:
+    def test_creates_user_with_bcrypt_and_inactive_subscription(self, enabled, monkeypatch):
+        users = StubUsers()
+        monkeypatch.setattr(auth, "_users_collection", lambda: users)
+        out = auth.register_user("Pat", "pat@b.co", "secret1")
+        assert out is not None
+        assert out["email"] == "pat@b.co" and out["role"] == "user"
+        assert out["plan"] == "free"
+        assert out["subscription"]["active"] is False
+        assert out["password"].startswith("$2")
+        assert users._users[0]["createdAt"] is not None
+
+    def test_duplicate_email_rejected_case_insensitive(self, enabled, monkeypatch):
+        users = StubUsers()
+        monkeypatch.setattr(auth, "_users_collection", lambda: users)
+        assert auth.register_user("a", "x@b.co", "secret1") is not None
+        assert auth.register_user("a", "X@B.CO", "secret1") is None
+        assert "already exists" in auth.last_error
+
+    def test_invalid_email_rejected(self, enabled):
+        assert auth.register_user("a", "not-an-email", "secret1") is None
+        assert "email" in auth.last_error.lower()
+
+    def test_short_password_rejected(self, enabled):
+        assert auth.register_user("a", "a@b.co", "abc") is None
+        assert "6 characters" in auth.last_error
+
+    def test_disabled_when_auth_off(self, monkeypatch):
+        monkeypatch.setattr(auth, "AUTH_MONGODB_URI", None)
+        monkeypatch.setattr(auth, "JWT_SECRET", None)
+        assert auth.register_user("a", "a@b.co", "secret1") is None
+        assert "not enabled" in auth.last_error
+
+
+class TestSubscription:
+    def test_free_user_cannot_scrape(self):
+        assert auth.can_scrape({"role": "user", "plan": "free"}) is False
+
+    def test_subscribed_user_can_scrape(self):
+        user = {"role": "user", "plan": "pro",
+                "subscription": {"active": True, "plan": "pro", "expiresAt": None}}
+        assert auth.can_scrape(user) is True
+
+    def test_admin_bypasses_subscription(self):
+        assert auth.can_scrape({"role": "admin", "plan": "free"}) is True
+
+    def test_expired_subscription_revoked(self):
+        user = {"role": "user", "plan": "pro",
+                "subscription": {"active": True, "expiresAt": "2020-01-01T00:00:00Z"}}
+        assert auth.can_scrape(user) is False
+
+    def test_epoch_expiry_past(self):
+        user = {"role": "user", "plan": "pro",
+                "subscription": {"active": True, "expiresAt": 1_600_000_000}}
+        assert auth.can_scrape(user) is False
+
+    def test_legacy_paid_plan_implies_subscribed(self):
+        assert auth.can_scrape({"role": "user", "plan": "pro"}) is True
+
+    def test_explicit_inactive_overrides_paid_plan(self):
+        user = {"role": "user", "plan": "pro",
+                "subscription": {"active": False, "plan": "pro"}}
+        assert auth.can_scrape(user) is False
+
+    def test_public_profile_never_exposes_password(self):
+        user = {"_id": "u1", "email": "a@b.co", "name": "A", "role": "user",
+                "plan": "pro", "subscription": {"active": True},
+                "password": "the-hash"}
+        p = auth.public_profile(user)
+        assert p["can_scrape"] is True and p["plan"] == "pro"
+        assert "password" not in p
+
+
+# --------------------------------------------------------------------------- #
+# HTTP: /api/register, /api/me and the /api/start subscription gate
+# --------------------------------------------------------------------------- #
+def test_register_returns_token_and_profile(enabled, monkeypatch):
+    users = StubUsers()
+    monkeypatch.setattr(auth, "_users_collection", lambda: users)
+    httpd, base = _serve()
+    try:
+        status, data = _json(base, "/api/register", method="POST",
+                             body={"name": "Pat", "email": "pat@b.co",
+                                   "password": "secret1"})
+        assert status == 200 and data["token"]
+        assert auth.verify_token(data["token"])
+        assert data["user"]["email"] == "pat@b.co"
+        assert data["user"]["plan"] == "free"
+        assert data["user"]["can_scrape"] is False
+        assert len(users._users) == 1
+        assert users._users[0]["password"].startswith("$2")
+    finally:
+        httpd.shutdown()
+
+
+def test_register_duplicate_returns_409(enabled, monkeypatch):
+    users = StubUsers()
+    monkeypatch.setattr(auth, "_users_collection", lambda: users)
+    httpd, base = _serve()
+    try:
+        _json(base, "/api/register", method="POST",
+              body={"email": "dup@b.co", "password": "secret1"})
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            _json(base, "/api/register", method="POST",
+                  body={"email": "DUP@b.co", "password": "secret1"})
+        assert exc.value.code == 409
+    finally:
+        httpd.shutdown()
+
+
+def test_register_invalid_password_400(enabled, monkeypatch):
+    users = StubUsers()
+    monkeypatch.setattr(auth, "_users_collection", lambda: users)
+    httpd, base = _serve()
+    try:
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            _json(base, "/api/register", method="POST",
+                  body={"email": "a@b.co", "password": "abc"})
+        assert exc.value.code == 400
+    finally:
+        httpd.shutdown()
+
+
+def test_me_returns_profile(http):
+    _, login = _json(http, "/api/login", method="POST",
+                     body={"email": "a@b.co", "password": "pw"})
+    status, data = _json(http, "/api/me", token=login["token"])
+    assert status == 200
+    assert data["enabled"] is True
+    assert data["email"] == "a@b.co"
+    assert data["plan"] == "free"
+    assert data["can_scrape"] is False   # u1 has no subscription
+    assert "password" not in data
+
+
+def test_start_blocked_for_free_user(http):
+    _, login = _json(http, "/api/login", method="POST",
+                     body={"email": "a@b.co", "password": "pw"})
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        _json(http, "/api/start", method="POST", token=login["token"], body={})
+    assert exc.value.code == 403
+    assert b"subscription" in exc.value.read().lower()
+
+
+def _subscribed_user(email, **extra):
+    user = {"_id": f"u-{email}", "email": email, "password": _bcrypt_hash("pw"),
+            "plan": "pro", "subscription": {"active": True, "plan": "pro",
+                                            "expiresAt": None}}
+    user.update(extra)
+    return user
+
+
+def test_start_allowed_for_subscribed_user(enabled, monkeypatch):
+    monkeypatch.setattr(web.JobManager, "start",
+                        lambda self, form: (True, "started"))
+    monkeypatch.setattr(auth, "_users_collection",
+                        lambda: StubCollection(_subscribed_user("pro@b.co")))
+    httpd, base = _serve()
+    try:
+        _, login = _json(base, "/api/login", method="POST",
+                         body={"email": "pro@b.co", "password": "pw"})
+        status, data = _json(base, "/api/start", method="POST",
+                             token=login["token"], body={})
+        assert status == 200 and data["ok"] is True
+    finally:
+        httpd.shutdown()
+
+
+def test_start_allowed_for_admin(enabled, monkeypatch):
+    monkeypatch.setattr(web.JobManager, "start",
+                        lambda self, form: (True, "started"))
+    user = {"_id": "u-boss", "email": "boss@b.co", "password": _bcrypt_hash("pw"),
+            "role": "admin", "plan": "free"}
+    monkeypatch.setattr(auth, "_users_collection", lambda: StubCollection(user))
+    httpd, base = _serve()
+    try:
+        _, login = _json(base, "/api/login", method="POST",
+                         body={"email": "boss@b.co", "password": "pw"})
+        status, data = _json(base, "/api/start", method="POST",
+                             token=login["token"], body={})
+        assert status == 200 and data["ok"] is True
+    finally:
+        httpd.shutdown()
+
+
+def test_start_blocked_for_expired_subscription(enabled, monkeypatch):
+    user = _subscribed_user("exp@b.co")
+    user["subscription"] = {"active": True, "expiresAt": "2020-01-01T00:00:00Z"}
+    monkeypatch.setattr(auth, "_users_collection", lambda: StubCollection(user))
+    httpd, base = _serve()
+    try:
+        _, login = _json(base, "/api/login", method="POST",
+                         body={"email": "exp@b.co", "password": "pw"})
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            _json(base, "/api/start", method="POST", token=login["token"], body={})
+        assert exc.value.code == 403
+    finally:
+        httpd.shutdown()
+
+
+def test_preflight_allows_authorization_header(enabled, monkeypatch):
+    monkeypatch.setattr(auth, "_users_collection",
+                        lambda: StubCollection({"_id": "u1"}))
+    httpd, base = _serve()
+    try:
+        req = urllib.request.Request(base + "/api/status", method="OPTIONS")
+        req.add_header("Origin", "https://app.skelersecurity.app")
+        with urllib.request.urlopen(req, timeout=5) as r:
+            assert r.status == 204
+            allowed = r.headers.get("Access-Control-Allow-Headers", "").lower()
+            assert "authorization" in allowed
     finally:
         httpd.shutdown()

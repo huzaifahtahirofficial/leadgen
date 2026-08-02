@@ -101,3 +101,54 @@ const links = await Promise.all(rawLinks.map(async (link) => ({
 ```
 
 This ensures fast performance (Redis caches the `name/email/role` for 5 minutes) and keeps your database queries decoupled!
+
+## Nestick: Accounts, Roles and Subscriptions
+
+Nestick is SaaS-shaped on top of the same shared identity store: the login screen
+has a **Sign in / Create account** toggle (`POST /api/register`), roles are read
+from the DB document, and **scraping is restricted to subscribed accounts** —
+`POST /api/start` returns `403` otherwise.
+
+- **Self-service registration** (`POST /api/register`) writes a new account to
+  `User Accounts` with a bcrypt hash, `role: "user"` and `plan: "free"`. The
+  endpoint is public (like `/api/login`) and returns a JWT so the account is
+  signed in immediately.
+- **Roles are assigned in the database**, never by self-signup. Accounts with
+  `role` in `admin / administrator / owner / root / superadmin` may always
+  scrape, regardless of subscription.
+- **Subscriptions are also DB-driven** — there is no billing provider. A user
+  can scrape when their document says so. Two equivalent ways (an explicit
+  `subscription` object overrides the bare plan string):
+
+  ```js
+  // Option A — explicit, supports expiry:
+  {
+    email: "customer@example.com",
+    role: "user",
+    plan: "pro",
+    subscription: { active: true, plan: "pro", expiresAt: null } // ISO-8601 or epoch
+  }
+
+  // Option B — legacy/seed: a paid plan string with no subscription object:
+  { email: "customer@example.com", role: "user", plan: "pro" }
+  ```
+
+  To grant access, update the user's document in MongoDB (Compass/MongoDB shell):
+  ```js
+  db.getCollection("User Accounts").updateOne(
+    { email: "customer@example.com" },
+    { $set: { plan: "pro", subscription: { active: true, plan: "pro", expiresAt: null } } }
+  )
+  ```
+  Set `expiresAt` (ISO-8601 or epoch seconds) to auto-revoke; an account with an
+  expired date or `subscription.active: false` is treated as not subscribed.
+
+- **UI feedback**: after signing in the app fetches `GET /api/me` (plan,
+  subscription, `can_scrape`) — the top bar shows a plan pill (`FREE` / `PRO`),
+  a "Subscription required" banner appears, and the **Start scraping** button is
+  disabled until an administrator enables the account. The API enforces the same
+  rule regardless of the UI.
+
+New accounts always start `plan: "free"` with `subscription.active: false`, so
+out-of-the-box a registered user cannot scrape until an admin grants a plan.
+When auth is not configured the app runs exactly as before (no login, no gating).
