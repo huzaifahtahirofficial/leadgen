@@ -19,6 +19,7 @@ API
 ``GET  /api/me``              profile + subscription state (bearer token)
 ``GET  /admin.html``          admin panel (static page; API is role-gated)
 ``GET  /api/admin/users``     list accounts + subscription state (admin)
+``GET  /api/admin/account``    find one account by email (admin; 404 if missing)
 ``POST /api/admin/subscription``  grant/revoke subscription by email (admin)
 
 With central auth enabled (AUTH_MONGODB_URI + JWT_SECRET), every /api/* route
@@ -653,6 +654,26 @@ def make_handler(jobs: JobManager) -> type[BaseHTTPRequestHandler]:
                     self._fail(503, auth.last_error or "Could not list accounts.")
                     return
                 self._json({"items": rows})
+            elif path == "/api/admin/account":
+                if self._require_admin() is None:
+                    return
+                qs = urlsplit(self.path).query
+                email = ""
+                for part in qs.split("&"):
+                    if part.startswith("email="):
+                        email = unquote(part[6:])
+                profile = auth.find_account(email)
+                if profile is None:
+                    reason = auth.last_error or "No account found."
+                    if reason.startswith("Auth database unreachable"):
+                        status = 503
+                    elif "No account found" in reason:
+                        status = 404
+                    else:
+                        status = 400
+                    self._fail(status, reason)
+                    return
+                self._json({"user": profile})
             elif path == "/api/status":
                 qs = urlsplit(self.path).query
                 idx = 0

@@ -700,6 +700,51 @@ class TestAdminApi:
         finally:
             httpd.shutdown()
 
+    def test_admin_account_lookup_requires_token(self, enabled, monkeypatch):
+        monkeypatch.setattr(auth, "_users_collection", lambda: StubUsers([]))
+        httpd, base = _serve()
+        try:
+            with pytest.raises(urllib.error.HTTPError) as exc:
+                _json(base, "/api/admin/account?email=a@b.co")
+            assert exc.value.code == 401
+        finally:
+            httpd.shutdown()
+
+    def test_admin_account_returns_profile_no_secret(self, enabled, monkeypatch):
+        user = {"_id": "u1", "email": "carlos@gmail.com", "name": "Carlos",
+                "password": _bcrypt_hash("pw"), "role": "user", "plan": "free",
+                "subscription": {"active": False, "plan": "free",
+                                 "expiresAt": None}}
+        monkeypatch.setattr(auth, "_users_collection",
+                            lambda: StubUsers([_admin_doc(), user]))
+        httpd, base = _serve()
+        try:
+            _, login = _json(base, "/api/login", method="POST",
+                             body={"email": "boss@b.co", "password": "pw"})
+            status, data = _json(base, "/api/admin/account?email=Carlos@Gmail.com",
+                                 token=login["token"])
+            assert status == 200
+            blob = json.dumps(data)
+            assert "Carlos@Gmail.com".lower() in blob
+            assert "password" not in data["user"]
+            assert "$2b$" not in blob
+        finally:
+            httpd.shutdown()
+
+    def test_admin_account_unknown_404(self, enabled, monkeypatch):
+        monkeypatch.setattr(auth, "_users_collection",
+                            lambda: StubUsers([_admin_doc()]))
+        httpd, base = _serve()
+        try:
+            _, login = _json(base, "/api/login", method="POST",
+                             body={"email": "boss@b.co", "password": "pw"})
+            with pytest.raises(urllib.error.HTTPError) as exc:
+                _json(base, "/api/admin/account?email=nobody@b.co",
+                      token=login["token"])
+            assert exc.value.code == 404
+        finally:
+            httpd.shutdown()
+
 
 class TestAdminSecurity:
     """The admin surface must be inert without a valid admin bearer token."""

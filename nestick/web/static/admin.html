@@ -48,6 +48,7 @@
   <div class="admin-wrap">
     <h2>Subscription admin</h2>
     <p class="muted">Grant or revoke scraping access by email. Roles and plans live in the database — changes apply instantly.</p>
+    <p id="srcLine" class="muted" style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px">Source: checking…</p>
 
     <div id="adminErr" class="banner hidden"></div>
 
@@ -66,6 +67,17 @@
       <label class="check"><input type="checkbox" id="g-active" checked> Active</label>
       <button id="grantBtn" class="primary" type="button">Set subscription</button>
     </aside>
+
+    <section class="panel">
+      <h3 style="margin:0 0 12px">Find account by email</h3>
+      <div class="grant-form" style="gap:10px">
+        <label>Email
+          <input type="email" id="f-email" placeholder="carlos@gmail.com" spellcheck="false" autocomplete="off">
+        </label>
+        <button id="findBtn" class="ghost" type="button">Find</button>
+      </div>
+      <div id="findOut" style="margin-top:12px"></div>
+    </section>
 
     <section class="panel">
       <div class="toolbar" style="margin-bottom:14px">
@@ -226,6 +238,50 @@
     searchTimer = setTimeout(() => loadUsers($("#search").value.trim()), 250);
   });
   $("#refreshBtn").addEventListener("click", () => loadUsers($("#search").value.trim()));
+
+  async function loadSource() {
+    const el = $("#srcLine");
+    try {
+      const s = await api("/api/auth-status");
+      const count = (s && typeof s.users === "number" && s.users >= 0) ? s.users : "?";
+      const coll = s && s.collection ? s.collection : "?";
+      const db = s && s.database ? s.database : "?";
+      el.textContent = "Source: DB \u201C" + db + "\u201D \u00B7 collection \u201C" + coll + "\u201D \u00B7 " +
+        count + " account(s). Accounts must live HERE to appear in this panel and to log in.";
+    } catch (e) {
+      el.textContent = "Source: " + (e && e.message ? e.message : "could not read auth config.");
+    }
+  }
+
+  const findBtn = $("#findBtn");
+  if (findBtn) findBtn.addEventListener("click", async () => {
+    clearErr();
+    const email = $("#f-email").value.trim();
+    const out = $("#findOut");
+    if (!email) { out.innerHTML = '<span class="muted">Enter an email address.</span>'; return; }
+    out.innerHTML = '<span class="muted">Searching \u2026</span>';
+    try {
+      const data = await api("/api/admin/account?email=" + encodeURIComponent(email));
+      const u = data.user || {};
+      const active = !!(u.subscription && u.subscription.active);
+      const plan = (u.plan || "free").toUpperCase();
+      out.innerHTML =
+        '<table class="users">' +
+          '<tr><th>Email</th><th>Name</th><th>Role</th><th>Plan</th><th>Status</th></tr>' +
+          '<tr>' +
+            '<td class="email">' + esc(u.email) + "</td>" +
+            '<td>' + (esc(u.name) || '<span class="muted">\u2014</span>') + "</td>" +
+            "<td>" + esc(u.role || "user") + "</td>" +
+            '<td><span class="pill plan ' + (active ? "ok" : "locked") + '">' + esc(plan) + "</span></td>" +
+            '<td><span class="status ' + (active ? "active" : "inactive") + '">' +
+              (active ? "ACTIVE" : "INACTIVE") + "</span></td>" +
+          "</tr>" +
+        "</table>";
+    } catch (e) {
+      out.innerHTML = '<span class="pill error">' + esc(e.message || "Account not found.") + "</span>";
+    }
+  });
+
   $("#backBtn").addEventListener("click", () => { window.location.href = "/"; });
   $("#logoutBtn").addEventListener("click", () => {
     token = "";
@@ -235,6 +291,7 @@
 
   boot();
   loadUsers("");
+  loadSource();
 })();
 </script>
 </body>

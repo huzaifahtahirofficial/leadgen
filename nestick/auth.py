@@ -418,6 +418,41 @@ def public_profile(user: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def find_account(email: str) -> dict[str, Any] | None:
+    """Authoritative lookup for a single account, keyed by email.
+
+    Uses the exact same collection and email/username match as login, so if the
+    user can sign in, this finds them. Returns :func:`public_profile` (or None;
+    ``last_error`` explains a not-found vs an unreachable database). This is the
+    definitive search for admins who cannot find an account elsewhere.
+    """
+    global last_error
+    last_error = None
+    if not enabled():
+        last_error = "Authentication is not enabled (AUTH_MONGODB_URI/JWT_SECRET missing)."
+        return None
+    email = (email or "").strip().lower()
+    if not email:
+        last_error = "An email address is required."
+        return None
+    try:
+        esc = re.escape(email)
+        user = _users_collection().find_one(
+            {"$or": [
+                {"email": {"$regex": f"^{esc}$", "$options": "i"}},
+                {"username": {"$regex": f"^{esc}$", "$options": "i"}},
+            ]}
+        )
+        if not user:
+            last_error = f"No account found for that email ({email})."
+            return None
+        return public_profile(user)
+    except Exception as exc:  # noqa: BLE001
+        last_error = f"Auth database unreachable: {type(exc).__name__}: {exc}"
+        log.error("Auth DB unavailable: %s", exc)
+        return None
+
+
 # --------------------------------------------------------------------------- #
 # Admin helpers (role-gated by the API; admins act on accounts by email)
 # --------------------------------------------------------------------------- #
