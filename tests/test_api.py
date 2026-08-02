@@ -20,7 +20,7 @@ from mock_api import VALID_KEY, MockAPI  # noqa: E402
 from nestick.config import Settings  # noqa: E402
 from nestick.discovery import ApiError, Discovery  # noqa: E402
 from nestick.http import Fetcher, api_error_message  # noqa: E402
-from nestick.models import ContactKind, Lead  # noqa: E402
+from nestick.models import ContactKind, Lead, Response  # noqa: E402
 from nestick.pipeline import Pipeline  # noqa: E402
 
 
@@ -264,6 +264,100 @@ class TestPlaces:
         s = settings_for(api, queries=["zero"], google_maps_key=VALID_KEY,
                          places=True, urls=[])
         assert run(with_discovery(s, lambda d: d.places_search("zero"))) == []
+
+
+# --------------------------------------------------------------------------- #
+class TestLocationScoping:
+    """Location must actually confine results, not just decorate the query."""
+
+    LAHORE_BOX = (31.42, 74.20, 31.62, 74.45)  # s, w, n, e
+
+    @pytest.fixture(autouse=True)
+    def _no_network_geocode(self, monkeypatch):
+        async def fake_bbox(self, place):
+            return TestLocationScoping.LAHORE_BOX
+
+        monkeypatch.setattr(
+            "nestick.places.OpenStreetMapPlaces.bounding_box", fake_bbox)
+
+    def test_places_sends_location_and_radius(self, api):
+        captured = {}
+
+        async def go():
+            s = settings_for(api, queries=["cafe"], google_maps_key=VALID_KEY,
+                             places=True, location="Lahore", urls=[])
+            async with Fetcher(s) as f:
+                d = Discovery(s, f)
+                orig = f.fetch_json
+
+                async def spy(url, **kw):
+                    if "textsearch" in url:
+                        captured.update(kw.get("params") or {})
+                    return await orig(url, **kw)
+
+                f.fetch_json = spy
+                return await d.places_search("cafe")
+
+        leads = run(go())
+        assert leads, "in-box result should be kept"
+        assert captured.get("location") == "31.52000,74.32500"
+        assert int(captured.get("radius") or 0) > 10_000
+
+    def test_drops_results_outside_location(self, api):
+        s = settings_for(api, queries=["cafe"], google_maps_key=VALID_KEY,
+                         places=True, location="Lahore", urls=[])
+        leads = run(with_discovery(s, lambda d: d.places_search("cafe")))
+        # Corner Cafe sits at (31.5497, 74.3436) — inside the Lahore box.
+        assert leads and leads[0].name == "Corner Cafe"
+
+    def test_drops_results_outside_geocoded_area(self, api, monkeypatch):
+        async def other_box(self, place):
+            return (46.50, 6.50, 46.70, 6.70)  # far from the mock result
+
+        monkeypatch.setattr(
+            "nestick.places.OpenStreetMapPlaces.bounding_box", other_box)
+        s = settings_for(api, queries=["cafe"], google_maps_key=VALID_KEY,
+                         places=True, location="Lausanne", urls=[])
+        assert run(with_discovery(s, lambda d: d.places_search("cafe"))) == []
+
+    def test_geocode_failure_still_returns_results(self, api, monkeypatch):
+        async def no_box(self, place):
+            return None
+
+        monkeypatch.setattr(
+            "nestick.places.OpenStreetMapPlaces.bounding_box", no_box)
+        s = settings_for(api, queries=["cafe"], google_maps_key=VALID_KEY,
+                         places=True, location="Somewhere", urls=[])
+        assert run(with_discovery(s, lambda d: d.places_search("cafe")))
+
+    def test_bing_sends_region_params(self, api):
+        s = settings_for(api, queries=["dentists"], country="pk",
+                         language="en", urls=[])
+        f = Fetcher(s)
+        d = Discovery(s, f)
+        captured = {}
+
+        async def fake_get(url, **kw):
+            captured["url"] = url
+            return Response(url=url, status=200,
+                            text="<h2><a href='https://acme.com/'>x</a></h2>")
+
+        f.get = fake_get
+        run(d.bing("dentists"))
+        assert "setmkt=en-PK" in captured["url"]
+        assert "cc=pk" in captured["url"]
+
+    def test_global_aggregators_never_followed(self):
+        from nestick.extract import Extractor
+
+        ex = Extractor(Settings(query="q"))
+        html = ('<a href="https://zocdoc.com/dentists">z</a>'
+                '<a href="https://smilelahore.pk/">s</a>'
+                '<a href="https://practo.com/lahore/clinics">p</a>')
+        orgs = ex.outbound_orgs(html, "https://lister.pk/best")
+        assert any("smilelahore" in o for o in orgs)
+        assert not any("zocdoc" in o for o in orgs)
+        assert not any("practo" in o for o in orgs)
 
 
 # --------------------------------------------------------------------------- #

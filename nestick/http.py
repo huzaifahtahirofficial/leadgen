@@ -26,6 +26,13 @@ from .utils import host_of, log
 
 _CHROME_RE = re.compile(r"Chrome/(\d+)")
 
+#: Consecutive failures before a proxy is rotated out for the run (the engine
+#: rotator's behaviour: a proxy that keeps returning 403/429 is dead weight).
+PROXY_BURN_STRIKES = 3
+#: Status codes that point at the proxy rather than the target (403 = the
+#: proxy is banned; 407 = proxy auth; 429 = the proxy's upstream quota).
+PROXY_BURN_STATUS = frozenset({403, 407, 429})
+
 
 def api_error_message(payload: Any) -> str | None:
     """Extract a human error from the various vendor JSON shapes.
@@ -244,6 +251,10 @@ class Fetcher:
         self._clients: list[httpx.AsyncClient] = []
         self._proxy_cycle = list(settings.proxies) or [None]  # type: ignore[list-item]
         self._rr = 0
+        #: Consecutive failures per proxy index; at PROXY_BURN_STRIKES the
+        #: proxy is skipped for the rest of the run.
+        self._proxy_strikes: dict[int, int] = {}
+        self._proxy_burned: set[int] = set()
         self._closed = False
 
     # -- lifecycle ------------------------------------------------------ #
@@ -288,9 +299,31 @@ class Fetcher:
         self.cache.close()
 
     # -- internals ------------------------------------------------------ #
-    def _client(self) -> httpx.AsyncClient:
-        self._rr += 1
-        return self._clients[self._rr % len(self._clients)]
+    def _client(self) -> tuple[int, httpx.AsyncClient]:
+        """Pick the next live proxy client, skipping burned proxies."""
+        n = len(self._clients)
+        for _ in range(n):
+            self._rr = (self._rr + 1) % n
+            idx = self._rr
+            if idx not in self._proxy_burned:
+                return idx, self._clients[idx]
+        # Everything burned — fall back to round-robin rather than fail.
+        self._rr = (self._rr + 1) % n
+        return self._rr, self._clients[self._rr]
+
+    def _strike_proxy(self, idx: int) -> None:
+        """Count a failure for a proxy; burn it after too many in a row."""
+        if not self._proxy_cycle[idx] or idx in self._proxy_burned:
+            return
+        self._proxy_strikes[idx] = self._proxy_strikes.get(idx, 0) + 1
+        if self._proxy_strikes[idx] >= PROXY_BURN_STRIKES:
+            self._proxy_burned.add(idx)
+            log.warning("Proxy %s burned after %d consecutive failures",
+                        self._proxy_cycle[idx], self._proxy_strikes[idx])
+
+    def _reward_proxy(self, idx: int) -> None:
+        if self._proxy_strikes.pop(idx, None) is not None:
+            log.debug("Proxy %s recovered", self._proxy_cycle[idx])
 
     def _headers(self, url: str, extra: dict[str, str] | None = None) -> dict[str, str]:
         ua = self.s.random_ua()
@@ -385,7 +418,7 @@ class Fetcher:
                 await self.gov.wait(host, self.s.jitter)
                 try:
                     self.stats.requests += 1
-                    client = self._client()
+                    idx, client = self._client()
                     if method == "GET":
                         r = await client.get(
                             url, headers=self._headers(url, headers), params=params
@@ -398,10 +431,13 @@ class Fetcher:
                     status = r.status_code
                     if status in self.RETRY_STATUS:
                         self.gov.penalise(host)
+                        self._strike_proxy(idx)
                         last_err = f"http-{status}"
                         raise _Retry(status)
                     if status >= 400:
                         self.stats.failures += 1
+                        if status in PROXY_BURN_STATUS:
+                            self._strike_proxy(idx)
                         # Keep small JSON/text error bodies: APIs explain the
                         # real problem there ("Invalid API key", quota, ...).
                         detail = ""
@@ -431,6 +467,7 @@ class Fetcher:
                         )
                     self.gov.reward(host)
                     self.stats.bytes_down += len(r.content)
+                    self._reward_proxy(idx)
                     resp = Response(
                         url=str(r.url), status=status, text=self._decode(r),
                         headers=dict(r.headers), elapsed=time.monotonic() - started,
@@ -442,6 +479,7 @@ class Fetcher:
                 except _Retry:
                     pass
                 except (httpx.TimeoutException, httpx.TransportError, httpx.HTTPError) as exc:
+                    self._strike_proxy(idx)
                     last_err = f"{type(exc).__name__}: {exc}"[:200]
                 except Exception as exc:  # noqa: BLE001 - never kill the crawl
                     last_err = f"{type(exc).__name__}: {exc}"[:200]

@@ -12,6 +12,7 @@ Sources
 from __future__ import annotations
 
 import asyncio
+import math
 import re
 from html import unescape
 from typing import Any, Iterable
@@ -40,6 +41,29 @@ BLOCK_MARKERS = (
 )
 
 
+def _box_radius(box: tuple[float, float, float, float]) -> int:
+    """Metres radius that covers a ``(south, west, north, east)`` box."""
+    s, w, n, e = box
+    lat_m = abs(n - s) * 111_320.0
+    lng_m = abs(e - w) * 111_320.0 * math.cos(math.radians((n + s) / 2))
+    return int(min(100_000, max(10_000, math.hypot(lat_m, lng_m) / 2)))
+
+
+def _in_box(lead: Lead, box: tuple[float, float, float, float]) -> bool:
+    """Keep a lead when it has no coordinates, or sits inside the (padded) box.
+
+    Padding absorbs nearby suburbs that genuinely belong to the target area;
+    leads with no coordinates pass through because there is nothing to check.
+    """
+    if lead.latitude is None or lead.longitude is None:
+        return True
+    s, w, n, e = box
+    pad_s = max(abs(n - s) * 0.25, 0.2)
+    pad_w = max(abs(e - w) * 0.25, 0.2)
+    return (s - pad_s <= lead.latitude <= n + pad_s and
+            w - pad_w <= lead.longitude <= e + pad_w)
+
+
 class Discovery:
     """Produces seed URLs (and optionally full leads) for the pipeline."""
 
@@ -49,6 +73,26 @@ class Discovery:
         self.ex = Extractor(settings)
         #: Human-readable API failures collected during the run (deduplicated).
         self.api_errors: list[str] = []
+        #: Engine block/challenge notes. Only surfaced as an API error when the
+        #: run produced nothing (a block that a fallback recovered from is just
+        #: logged, not alarmed about).
+        self._block_notes: list[str] = []
+        #: Geocoded bounding box for the target location, computed once.
+        self._location_box_cache: tuple[float, float, float, float] | None = None
+        self._location_box_tried = False
+
+    # ------------------------------------------------------------------ #
+    async def _location_box(self) -> tuple[float, float, float, float] | None:
+        """Geocode ``settings.location`` to ``(south, west, north, east)`` once."""
+        if not self.s.location:
+            return None
+        if not self._location_box_tried:
+            self._location_box_tried = True
+            from .places import OpenStreetMapPlaces
+
+            self._location_box_cache = await OpenStreetMapPlaces(
+                self.f, self.s).bounding_box(self.s.location)
+        return self._location_box_cache
 
     # ------------------------------------------------------------------ #
     # Entry point
@@ -100,6 +144,10 @@ class Discovery:
                 log.warning("Discovery failed for %r: %s", query, exc)
 
         clean = [u for u in dedupe(urls) if u and self.ex.is_scrapeable(u)]
+        # A block is only a problem when the whole run came up empty — if a
+        # fallback engine recovered, treat it as a logged note, not a banner.
+        if not clean and not leads and self._block_notes:
+            self.api_errors.extend(self._block_notes)
         return clean, leads
 
     def _note_api_error(self, message: str) -> None:
@@ -207,7 +255,14 @@ class Discovery:
         out: list[str] = []
         q = query if not self.s.location else f"{query} {self.s.location}"
         for page in range(self.s.pages):
-            url = f"https://www.bing.com/search?q={quote_plus(q)}&first={page * 10 + 1}&count=30"
+            # setmkt/cc give Bing a hard region hint (like the DDG kl param);
+            # without them a datacenter IP gets region-neutral results.
+            url = (
+                "https://www.bing.com/search?"
+                f"q={quote_plus(q)}&first={page * 10 + 1}&count=30"
+                f"&setmkt={self.s.language}-{self.s.country.upper()}"
+                f"&cc={self.s.country}"
+            )
             r = await self.f.get(url, robots_check=False, use_cache=False)
             if not r.ok:
                 self._note_blocked("Bing", r.status)
@@ -250,12 +305,14 @@ class Discovery:
         return any(m in low for m in BLOCK_MARKERS)
 
     def _note_blocked(self, engine: str, status: int | None = None) -> None:
-        """Record a block/challenge so the UI explains why a run found nothing."""
+        """Record a block/challenge; surfaced only if the run finds nothing."""
         code = f" (HTTP {status})" if status else ""
         msg = (f"{engine} returned a block or challenge page{code} — datacenter "
                f"IPs are often rate-limited. Add a SerpApi key, use the Places "
                f"option (free OpenStreetMap), or run from a residential IP.")
-        self._note_api_error(msg)
+        if msg not in self._block_notes:
+            self._block_notes.append(msg)
+            log.warning("%s", msg)
 
     # ------------------------------------------------------------------ #
     # Google Places (port of app.js behaviour, server-side)
@@ -288,12 +345,20 @@ class Discovery:
         key = self.s.google_maps_key
         if not key:
             return []
+        # Text Search is global unless bounded: geocode the location and pass
+        # location + radius so results are confined to the target area.
+        box = await self._location_box()
         leads: list[Lead] = []
         token: str | None = None
         for _ in range(min(self.s.pages, 3)):  # Places caps at 3 pages / 60 results
             params: dict[str, Any] = {"key": key, "query": query}
             if self.s.location:
                 params["query"] = f"{query} {self.s.location}"
+            if box:
+                lat = (box[0] + box[2]) / 2.0
+                lng = (box[1] + box[3]) / 2.0
+                params["location"] = f"{lat:.5f},{lng:.5f}"
+                params["radius"] = _box_radius(box)
             if token:
                 params = {"key": key, "pagetoken": token}
                 await asyncio.sleep(2)  # token activation delay
@@ -341,6 +406,12 @@ class Discovery:
             token = data.get("next_page_token")
             if not token:
                 break
+        if box:
+            kept = [l for l in leads if _in_box(l, box)]
+            if len(kept) < len(leads):
+                log.info("Places: dropped %d result(s) outside %r",
+                         len(leads) - len(kept), self.s.location)
+            leads = kept
         log.info("Places: %d businesses for %r", len(leads), query)
         return leads
 

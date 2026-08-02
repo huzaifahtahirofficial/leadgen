@@ -121,6 +121,10 @@ every flag below can also be set through its environment variable.""",
                    help="do not consult robots.txt [NESTICK_IGNORE_ROBOTS]")
     c.add_argument("--no-http2", action="store_true", default=_env("NESTICK_NO_HTTP2", False, bool),
                    help="disable HTTP/2 [NESTICK_NO_HTTP2]")
+    c.add_argument("--no-sitemaps", action="store_true",
+                   default=_env("NESTICK_NO_SITEMAPS", False, bool),
+                   help="skip robots.txt→sitemap (and Wayback) contact-page "
+                        "discovery before crawling each site [NESTICK_NO_SITEMAPS]")
     c.add_argument("--allow-private", action="store_true",
                    default=_env("NESTICK_ALLOW_PRIVATE", False, bool),
                    help="permit localhost/RFC1918 targets (intranet scraping); "
@@ -205,6 +209,7 @@ def settings_from_args(a: argparse.Namespace) -> Settings:
         proxy_file=a.proxy_file,
         respect_robots=not a.ignore_robots,
         http2=not a.no_http2,
+        sitemap_discovery=not a.no_sitemaps,
         allow_private_networks=a.allow_private,
         want=tuple(w.strip() for w in a.want.split(",") if w.strip()),
         min_confidence=a.min_confidence,

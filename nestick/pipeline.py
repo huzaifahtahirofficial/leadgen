@@ -215,6 +215,8 @@ class Pipeline:
         self.leads[domain] = lead
         budget = self.s.max_pages_per_site
         queue: list[str] = [u for u in dedupe(seed_urls) if u not in self._seen_urls][:3]
+        if self.s.sitemap_discovery:
+            queue = await self._sitemap_seeds(domain, queue)
         visited: set[str] = set()
         depth_of: dict[str, int] = {u: 0 for u in queue}
 
@@ -279,6 +281,34 @@ class Pipeline:
         if not lead.url and seed_urls:
             lead.url = seed_urls[0]
         return lead
+
+    async def _sitemap_seeds(self, domain: str, queue: list[str]) -> list[str]:
+        """Prepend contact pages found via robots→sitemap, then Wayback CDX.
+
+        Sites hide contact pages from their homepage graph but publish them in
+        sitemaps; the Wayback index recovers them even without one. Discovered
+        URLs go ahead of the original seeds because they are the highest-value
+        pages (sitemap crawler behaviour), bounded by the crawl budget below.
+        """
+        from .sitemap import SitemapIndex, WaybackCdx
+
+        seeds: list[str] = []
+        for source in (SitemapIndex(self.fetcher), WaybackCdx(self.fetcher)):
+            try:
+                found = await source.contact_urls(domain)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - never stall a crawl
+                log.debug("Sitemap/Wayback discovery failed for %s: %s", domain, exc)
+                continue
+            for u in found:
+                if (u not in self._seen_urls and u not in queue
+                        and self.extractor.is_scrapeable(u)):
+                    seeds.append(u)
+        if seeds:
+            log.info("%s: %d contact page(s) found via sitemap/Wayback",
+                     domain, len(seeds))
+        return list(dedupe([*seeds, *queue]))
 
     @staticmethod
     def _apply_meta(lead: Lead, meta: dict[str, Any]) -> None:

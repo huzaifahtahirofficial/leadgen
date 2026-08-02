@@ -70,6 +70,14 @@ SKIP_DOMAINS: frozenset[str] = frozenset(
         "apple.com", "microsoft.com", "cloudflare.com", "jsdelivr.net",
         "unpkg.com", "bootstrapcdn.com", "fontawesome.com", "w3.org",
         "schema.org", "archive.org", "t.me", "whatsapp.com", "play.google.com",
+        # Global business directories. Search engines surface these for
+        # "X in <city>" queries; following them leaks leads from *everywhere*,
+        # which is the opposite of a location-scoped run.
+        "zocdoc.com", "healthgrades.com", "vitals.com", "practo.com",
+        "justdial.com", "lybrate.com", "clutch.co", "goodfirms.co",
+        "trustpilot.com", "thumbtack.com", "bark.com", "angieslist.com",
+        "yellowpages.com", "yell.com", "thomsonlocal.com", "hotfrog.com",
+        "cylex.com", "infobel.com",
     }
 )
 
@@ -178,6 +186,11 @@ class Settings:
     follow_directories: bool = True
     max_directory_links: int = 40
     directory_waves: int = 1
+    #: Before crawling a site, pull its contact pages from robots.txt-referenced
+    #: sitemaps (and the Wayback CDX index when there is no usable sitemap).
+    #: Sites routinely hide contact pages from the homepage graph but publish
+    #: them in sitemaps.
+    sitemap_discovery: bool = True
     timeout: float = 15.0
     connect_timeout: float = 8.0
     max_retries: int = 3
